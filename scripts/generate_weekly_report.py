@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from src.bigquery.client import BigQueryClient
 from src.bigquery.queries import WeeklyDataQuery
-from src.classifier.content_classifier import ContentClassifier
+from src.classifier.vector_classifier import VectorContentClassifier
 from src.vectorstore.chroma_store import ChromaVectorStore
 from src.reporter.analytics import WeeklyAnalytics
 from src.reporter.report_generator import ReportGenerator
@@ -42,11 +42,11 @@ def main():
         print("❌ 데이터가 없어 리포트를 생성할 수 없습니다.")
         return
 
-    # 2. 콘텐츠 분류
-    print("2️⃣  콘텐츠 분류")
+    # 2. 콘텐츠 분류 (벡터 기반 - 빠름!)
+    print("2️⃣  콘텐츠 분류 (벡터 유사도 기반)")
     print("-" * 60)
 
-    classifier = ContentClassifier()
+    classifier = VectorContentClassifier()
 
     if letters:
         print(f"편지글 {len(letters)}건 분류 중...")
