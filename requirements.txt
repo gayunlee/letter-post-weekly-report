@@ -1,0 +1,16 @@
+# BigQuery
+google-cloud-bigquery==3.14.1
+
+# LLM API
+anthropic==0.39.0
+
+# Vector Database
+chromadb==0.4.22
+
+# Data Processing
+pandas==2.1.4
+numpy==1.26.2
+
+# Utilities
+python-dotenv==1.0.0
+tqdm==4.66.1
