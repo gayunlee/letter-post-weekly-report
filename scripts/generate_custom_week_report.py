@@ -10,6 +10,8 @@ from src.storage.data_store import ClassifiedDataStore
 from src.vectorstore.chroma_store import ChromaVectorStore
 from src.reporter.analytics import WeeklyAnalytics
 from src.reporter.report_generator import ReportGenerator
+from src.integrations.notion_client import NotionReportClient
+from src.integrations.slack_client import SlackNotifier
 
 
 def generate_week_data(start_date, end_date, data_store, master_info=None):
@@ -174,10 +176,58 @@ def main():
 
     print(f"✓ 리포트 생성 완료")
     print(f"✓ 저장 위치: {output_path}")
-    print()
 
+    # 6. Notion에 리포트 업로드
+    print(f"\n[6단계] Notion 업로드")
+    try:
+        notion_client = NotionReportClient()
+        week_label = SlackNotifier.get_week_label(target_start)
+
+        # 페이지 제목 생성
+        from datetime import datetime, timedelta
+        start_formatted = datetime.strptime(target_start, '%Y-%m-%d').strftime('%Y.%m.%d')
+        end_dt = datetime.strptime(target_end, '%Y-%m-%d')
+        end_formatted = (end_dt - timedelta(days=1)).strftime('%m.%d')
+        page_title = f"이용자 반응 리포트 ({start_formatted} ~ {end_formatted})"
+
+        page_info = notion_client.create_report_page(
+            title=page_title,
+            markdown_content=report,
+            start_date=target_start,
+            end_date=target_end
+        )
+
+        notion_url = page_info["url"]
+        print(f"✓ Notion 페이지 생성 완료")
+        print(f"✓ URL: {notion_url}")
+    except Exception as e:
+        print(f"⚠️  Notion 업로드 실패: {str(e)}")
+        notion_url = None
+
+    # 7. Slack 알림 전송
+    print(f"\n[7단계] Slack 알림 전송")
+    if notion_url:
+        try:
+            slack_client = SlackNotifier()
+            result = slack_client.send_report_notification(
+                week_label=week_label,
+                start_date=target_start,
+                end_date=target_end,
+                notion_url=notion_url
+            )
+
+            if result.get("ok"):
+                print(f"✓ Slack 알림 전송 완료")
+            else:
+                print(f"⚠️  Slack 알림 전송 실패: {result.get('error')}")
+        except Exception as e:
+            print(f"⚠️  Slack 알림 전송 실패: {str(e)}")
+    else:
+        print("⚠️  Notion URL이 없어 Slack 알림을 건너뜁니다.")
+
+    print()
     print("="*60)
-    print("✅ 주간 리포트 생성 완료!")
+    print("✅ 주간 리포트 생성 및 공유 완료!")
     print("="*60)
 
 
