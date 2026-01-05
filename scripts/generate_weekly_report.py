@@ -10,63 +10,108 @@ from src.classifier.vector_classifier import VectorContentClassifier
 from src.vectorstore.chroma_store import ChromaVectorStore
 from src.reporter.analytics import WeeklyAnalytics
 from src.reporter.report_generator import ReportGenerator
+from src.storage.data_store import ClassifiedDataStore
 
 
 def main():
     """주간 리포트 생성 메인 프로세스"""
 
     print("=" * 60)
-    print("📊 주간 리포트 자동 생성 시스템")
+    print("📊 주간 리포트 자동 생성 시스템 (증분 처리)")
     print("=" * 60)
     print()
 
-    # 1. BigQuery 데이터 조회
-    print("1️⃣  BigQuery 데이터 조회")
-    print("-" * 60)
+    # 0. 데이터 저장소 초기화
+    data_store = ClassifiedDataStore(
+        classified_data_dir=os.getenv("CLASSIFIED_DATA_DIR", "./data/classified_data"),
+        stats_dir=os.getenv("STATS_DIR", "./data/stats")
+    )
 
-    client = BigQueryClient()
-    query = WeeklyDataQuery(client)
-
-    start_date, end_date = query.get_last_week_range()
-    print(f"📅 조회 기간: {start_date} ~ {end_date}")
-
-    weekly_data = query.get_weekly_data(start_date, end_date)
-    letters = weekly_data['letters']
-    posts = weekly_data['posts']
-
-    print(f"✓ 편지글 {len(letters)}건 조회")
-    print(f"✓ 게시글 {len(posts)}건 조회")
+    # 날짜 범위 계산
+    start_date, end_date = WeeklyDataQuery.get_last_week_range()
+    print(f"📅 대상 기간: {start_date} ~ {end_date}")
     print()
 
-    if not letters and not posts:
-        print("❌ 데이터가 없어 리포트를 생성할 수 없습니다.")
-        return
-
-    # 2. 콘텐츠 분류 (벡터 기반 - 빠름!)
-    print("2️⃣  콘텐츠 분류 (벡터 유사도 기반)")
+    # 1. 저장된 분류 결과 확인
+    print("1️⃣  분류 데이터 확인")
     print("-" * 60)
 
-    classifier = VectorContentClassifier()
+    if data_store.exists(start_date):
+        print(f"✓ 저장된 분류 결과 발견!")
+        print(f"  로드 중...")
 
-    if letters:
-        print(f"편지글 {len(letters)}건 분류 중...")
-        classified_letters = classifier.classify_batch(
-            letters,
-            content_field="message"
-        )
-        print(f"✓ 편지글 분류 완료")
-    else:
-        classified_letters = []
+        classified_data = data_store.load_weekly_data(start_date)
+        classified_letters = classified_data['letters']
+        classified_posts = classified_data['posts']
 
-    if posts:
-        print(f"게시글 {len(posts)}건 분류 중...")
-        classified_posts = classifier.classify_batch(
-            posts,
-            content_field="textBody"
-        )
-        print(f"✓ 게시글 분류 완료")
+        print(f"✓ 편지글 {len(classified_letters)}건 로드")
+        print(f"✓ 게시글 {len(classified_posts)}건 로드")
+        print(f"⚡ 재분류 생략 (기존 데이터 재사용)")
     else:
-        classified_posts = []
+        print(f"❌ 저장된 분류 결과 없음")
+        print(f"  BigQuery 조회 및 분류 시작...")
+        print()
+
+        # BigQuery 데이터 조회
+        print("  📊 BigQuery 데이터 조회")
+        print("  " + "-" * 58)
+
+        client = BigQueryClient()
+        query_with_client = WeeklyDataQuery(client)
+
+        weekly_data = query_with_client.get_weekly_data(start_date, end_date)
+        letters = weekly_data['letters']
+        posts = weekly_data['posts']
+
+        print(f"  ✓ 편지글 {len(letters)}건 조회")
+        print(f"  ✓ 게시글 {len(posts)}건 조회")
+        print()
+
+        if not letters and not posts:
+            print("  ❌ 데이터가 없어 리포트를 생성할 수 없습니다.")
+            return
+
+        # 콘텐츠 분류 (벡터 기반)
+        print("  📝 콘텐츠 분류 (벡터 유사도 기반)")
+        print("  " + "-" * 58)
+
+        classifier = VectorContentClassifier()
+
+        if letters:
+            print(f"  편지글 {len(letters)}건 분류 중...")
+            classified_letters = classifier.classify_batch(
+                letters,
+                content_field="message"
+            )
+            print(f"  ✓ 편지글 분류 완료")
+        else:
+            classified_letters = []
+
+        if posts:
+            print(f"  게시글 {len(posts)}건 분류 중...")
+            classified_posts = classifier.classify_batch(
+                posts,
+                content_field="textBody"
+            )
+            print(f"  ✓ 게시글 분류 완료")
+        else:
+            classified_posts = []
+
+        print()
+
+        # 분류 결과 저장 (2-Tier)
+        print("  💾 분류 결과 저장 (2-Tier)")
+        print("  " + "-" * 58)
+
+        data_store.save_weekly_data(
+            start_date,
+            end_date,
+            classified_letters,
+            classified_posts
+        )
+
+        print(f"  ✓ 전체 데이터 저장: data/classified_data/{start_date}.json")
+        print(f"  ✓ 통계 요약 저장: data/stats/{start_date}.json")
 
     print()
 
@@ -104,14 +149,40 @@ def main():
 
     print()
 
+    # 2. 전주 데이터 로드 (전주 비교)
+    print("2️⃣  전주 데이터 로드")
+    print("-" * 60)
+
+    prev_start, prev_end = WeeklyDataQuery.get_previous_week_range()
+    print(f"📅 전주 기간: {prev_start} ~ {prev_end}")
+
+    previous_letters = None
+    previous_posts = None
+
+    if data_store.exists(prev_start):
+        try:
+            previous_data = data_store.load_weekly_data(prev_start)
+            previous_letters = previous_data['letters']
+            previous_posts = previous_data['posts']
+            print(f"✓ 전주 데이터 로드: 편지 {len(previous_letters)}건, 게시글 {len(previous_posts)}건")
+        except Exception as e:
+            print(f"⚠️  전주 데이터 로드 실패: {str(e)}")
+            print("   (전주 비교 없이 진행됩니다)")
+    else:
+        print(f"❌ 전주 데이터 없음 (첫 실행 또는 전주 데이터 미생성)")
+
+    print()
+
     # 4. 통계 분석
-    print("4️⃣  통계 분석")
+    print("4️⃣  통계 분석 (전주 비교)")
     print("-" * 60)
 
     analytics = WeeklyAnalytics()
     stats = analytics.analyze_weekly_data(
         classified_letters,
-        classified_posts
+        classified_posts,
+        previous_letters=previous_letters,
+        previous_posts=previous_posts
     )
 
     total = stats["total_stats"]["this_week"]

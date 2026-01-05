@@ -134,3 +134,22 @@ class WeeklyDataQuery:
         end_date = (last_sunday + timedelta(days=1)).strftime('%Y-%m-%d')
 
         return start_date, end_date
+
+    @staticmethod
+    def get_previous_week_range() -> tuple[str, str]:
+        """
+        전전주(2주 전)의 날짜 범위 반환 (월요일 ~ 일요일)
+
+        Returns:
+            (start_date, end_date) 튜플 (YYYY-MM-DD 형식)
+        """
+        today = datetime.now()
+        # 2주 전 월요일
+        prev_monday = today - timedelta(days=today.weekday() + 14)
+        # 2주 전 일요일
+        prev_sunday = prev_monday + timedelta(days=6)
+
+        start_date = prev_monday.strftime('%Y-%m-%d')
+        end_date = (prev_sunday + timedelta(days=1)).strftime('%Y-%m-%d')
+
+        return start_date, end_date
