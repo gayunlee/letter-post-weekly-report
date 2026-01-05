@@ -1,113 +1,127 @@
-"""벡터 유사도 기반 콘텐츠 분류 시스템"""
+"""벡터 유사도 기반 콘텐츠 분류 시스템 (하이브리드)"""
 from typing import List, Dict, Any
 from ..vectorstore.chroma_store import ChromaVectorStore
+from .content_classifier import ContentClassifier
 
 
 class VectorContentClassifier:
     """벡터 유사도 기반 콘텐츠 분류기 (빠른 분류)"""
 
     # Few-shot 학습 예제 (분류 가이드)
+    # 핵심 구분 기준:
+    # - 감사·후기: "감사", "고맙", "덕분에", 긍정적 투자 후기
+    # - 질문·토론: "~인가요?", "~할까요?", "궁금", 투자/비중/종목 질문
+    # - 정보성 글: 정보 공유, 뉴스 링크, 공지 (질문 없음)
+    # - 서비스 피드백: 파일/링크/배송/일정 문의 (플랫폼 관련)
+    # - 불편사항: "답답", "불편", "소외감", 부정적 감정
+    # - 일상·공감: 가입인사, 안부, 축하, 개인 이야기
     TRAINING_EXAMPLES = [
-        # 감사·후기
-        {
-            "content": "쌤과 인연이 되어 양때목장의 양이 된지 2개월 남짓 됬네요. 두환쌤 덕분에 투자의 눈을 떠가는 1인입니다. 정말 감사합니다.",
-            "category": "감사·후기"
-        },
-        {
-            "content": "올해도 며칠안남았는데 마무리 잘하셨음하고 새해 복 많이 받으세요. 늘 감사하고 응원합니다.",
-            "category": "감사·후기"
-        },
-        {
-            "content": "전무님 올 한해 임직원분들과 함께 신세 많이 졌습니다. 감사합니다.",
-            "category": "감사·후기"
-        },
-        # 질문·토론
-        {
-            "content": "26년도 포트폴리오 구성할때 샘이 생각하시는 방향으로 가고 싶은데, 삼성전자나 하이닉스를 스터디 목록에 편입하지 않으시는 이유가 궁금합니다.",
-            "category": "질문·토론"
-        },
-        {
-            "content": "매주 공유해주시는 포트폴리오 종목들 비중도 같이 알려주실수있나요?",
-            "category": "질문·토론"
-        },
-        {
-            "content": "잠재 GDP의 과거 데이터까지 모두 확인하는 방법을 알고 싶습니다.",
-            "category": "질문·토론"
-        },
-        # 정보성 글
-        {
-            "content": "제 직업은 반도체 설계 엔지니어입니다. 엔비디아나 브로드컴 같은 글로벌 팹리스 기업에 대해 분석해봤습니다. AI 데이터센터 수요가 폭발적으로 증가하고 있습니다.",
-            "category": "정보성 글"
-        },
-        {
-            "content": "1-2주간 포트폴리오에서 가장큰 변화는 반도체의 비중을 많이 늘렸습니다. 16%에서 28%까지 올렸네요. 26년도 삼성전자, 하이닉스가 좋은 실적을 보일 것 같습니다.",
-            "category": "정보성 글"
-        },
-        {
-            "content": "금이 우리 포트보다 많이 올랐다. 은이 우리 포트보다 많이 올랐다. 투자 전략을 공유합니다.",
-            "category": "정보성 글"
-        },
-        # 서비스 피드백 (중립적인 문의/요청)
-        {
-            "content": "19회차 라이프 강의 자료 링크가 첨부 파일로 연결되지 않습니다. 확인 부탁드립니다.",
-            "category": "서비스 피드백"
-        },
-        {
-            "content": "굿모닝 담샘 글이 올라오고 나서 바로 들어가 보면 녹음 파일이 안보이던데 녹음 파일 올라오는 데는 시간이 조금 더 걸리는 건가요?",
-            "category": "서비스 피드백"
-        },
-        {
-            "content": "컴퍼런스 일정 안내를 받지 못했습니다. 언제, 어디서 하는지 어떻게 알 수 있을까요?",
-            "category": "서비스 피드백"
-        },
-        # 불편사항 (불만, 답답함, 개선 요청)
-        {
-            "content": "앱이 자꾸 튕겨요. 강의 보다가 끊기면 너무 답답합니다. 언제 고쳐지나요?",
-            "category": "불편사항"
-        },
-        {
-            "content": "결제를 했는데 강의가 안 열려요. 문의해도 답변이 없어서 정말 불편합니다.",
-            "category": "불편사항"
-        },
-        {
-            "content": "매번 같은 질문인데 왜 답변을 안 해주시는 건가요? 소통이 안 되는 느낌입니다.",
-            "category": "불편사항"
-        },
-        {
-            "content": "구독료 대비 콘텐츠가 너무 적은 것 같아요. 좀 더 자주 업데이트 해주셨으면 합니다.",
-            "category": "불편사항"
-        },
-        {
-            "content": "알림이 너무 많이 와서 불편해요. 알림 설정 기능이 있었으면 좋겠습니다.",
-            "category": "불편사항"
-        },
-        # 일상·공감
-        {
-            "content": "오로지 희망님 기쁜 소식 축하드립니다! 너무 너무 축하드려요. 담쌤 수면 시간 충분히 늘리셔요.",
-            "category": "일상·공감"
-        },
-        {
-            "content": "새해 복 많이 받으세요! 모두 건강하시고 행복한 한 해 되시길 바랍니다.",
-            "category": "일상·공감"
-        },
-        {
-            "content": "오투님 이거 입히는것이 제 소원이었는데 겨우 구했습니다. 기쁩니다!",
-            "category": "일상·공감"
-        }
+        # ========== 감사·후기 (12개) - 감사 표현, 긍정적 투자 후기 ==========
+        {"content": "감사합니다", "category": "감사·후기"},
+        {"content": "정보 감사합니다", "category": "감사·후기"},
+        {"content": "답변주셔서 고맙습니다", "category": "감사·후기"},
+        {"content": "쌤 덕분에 투자의 눈을 떠가는 1인입니다. 정말 감사합니다.", "category": "감사·후기"},
+        {"content": "항상 좋은 정보 감사드립니다. 덕분에 많이 배우고 있습니다.", "category": "감사·후기"},
+        {"content": "쌤 믿고 기다리니 쭉쭉 올라갔어요. 신입분들 조급하게 생각마시고 기다리세요.", "category": "감사·후기"},
+        {"content": "처음 두산우를 고점에 들어가서 몇달 고생했는데 믿고 기다리니 쭉쭉올라갔어요.", "category": "감사·후기"},
+        {"content": "몰빵 종목 털어버리고 새로운 신학기로 가서 좋았어요.", "category": "감사·후기"},
+        {"content": "쌤의 엄청난 노력으로 제가 돈 벌고 있음에 고맙고 감사합니다.", "category": "감사·후기"},
+        {"content": "월간전망 강의듣고 집으로가는길입니다. 늘 감사드립니다.", "category": "감사·후기"},
+        {"content": "오프라인 강의 참석했는데 정말 유익했습니다.", "category": "감사·후기"},
+        {"content": "두환쌤 덕에 쉽게 주식합니다. 주식은 계속내리다가 잠깐 오르니깐요.", "category": "감사·후기"},
+
+        # ========== 질문·토론 (12개) - 투자/비중/종목 질문 ==========
+        {"content": "삼성전자를 스터디 목록에 편입하지 않으시는 이유가 궁금합니다.", "category": "질문·토론"},
+        {"content": "포트폴리오 종목들 비중도 같이 알려주실수있나요?", "category": "질문·토론"},
+        {"content": "비트코인 rsi는 일봉 기준인가요?", "category": "질문·토론"},
+        {"content": "조정장이 올수도 있다고 하셨는데요 이게 4분기보다 조정이 클까요?", "category": "질문·토론"},
+        {"content": "크립토는 편출 이슈 이후에 진입해도 늦지 않을까요?", "category": "질문·토론"},
+        {"content": "개나리반하고 겨울학기하고 어떻게 차이 있나요?", "category": "질문·토론"},
+        {"content": "sk이노베이션은 에너지와 이차전지 혼합인가요?", "category": "질문·토론"},
+        {"content": "월세 보증금 비중반영은 어떻게 해야하나요?", "category": "질문·토론"},
+        {"content": "이수페타시스는 스터디종목에서 제외된걸까요?", "category": "질문·토론"},
+        {"content": "퇴직금 운영방식이 DB형과 DC형이 있다고해요. 어떤게 나을까요?", "category": "질문·토론"},
+        {"content": "IRP는 어떻게 세팅해야할까요?", "category": "질문·토론"},
+        {"content": "템퍼스 AI 주식을 갖고 있는데 계속 가지고 있어야 할지 팔아야 할지 모르겠어요.", "category": "질문·토론"},
+
+        # ========== 정보성 글 (12개) - 정보 공유, 뉴스, 공지 ==========
+        {"content": "AI 데이터센터 수요가 폭발적으로 증가하고 있습니다.", "category": "정보성 글"},
+        {"content": "포트폴리오에서 반도체 비중을 16%에서 28%까지 올렸습니다.", "category": "정보성 글"},
+        {"content": "지난밤 미국 원전주 포함 에너지주가 폭등했습니다.", "category": "정보성 글"},
+        {"content": "정리된 종목표 챕터에 있습니다 참고요~", "category": "정보성 글"},
+        {"content": "■ 마스터님은 유튜브와 어스플러스 외에 어떤 채팅방도 운영하지 않습니다.", "category": "정보성 글"},
+        {"content": "속보 떴네요. 뉴스 링크 공유합니다.", "category": "정보성 글"},
+        {"content": "작년 코스피 상승, 삼전·SK하닉 빼면 반토막", "category": "정보성 글"},
+        {"content": "오늘 코스피 삼전,닉스 빼면 지수가 마이너스. 하락종목수가 더 많아요.", "category": "정보성 글"},
+        {"content": "[지노믹트리] 식약처 승인이 연장되더니 결국 취소됐습니다.", "category": "정보성 글"},
+        {"content": "현재 PER 34 저평가다. 보수적으로 PER 36으로 계산해보면 18% 추가 상승 가능합니다.", "category": "정보성 글"},
+        {"content": "올해 1년간 결산입니다. 한국자산 +166.8%, 해외자산 +23.9% 수익률입니다.", "category": "정보성 글"},
+        {"content": "제 의견을 드리자면 두 종목간에 매수매도하여 평단을 낮추는건 크게 의미가 없을듯합니다.", "category": "정보성 글"},
+
+        # ========== 서비스 피드백 (10개) - 파일/링크/배송/일정 문의 ==========
+        {"content": "강의 자료 링크가 연결되지 않습니다. 확인 부탁드립니다.", "category": "서비스 피드백"},
+        {"content": "녹음 파일이 안보이던데 시간이 더 걸리는 건가요?", "category": "서비스 피드백"},
+        {"content": "컴퍼런스 일정 안내를 받지 못했습니다. 언제 하는지 알 수 있을까요?", "category": "서비스 피드백"},
+        {"content": "오프라인 강의 초대는 어떻게 받나요?", "category": "서비스 피드백"},
+        {"content": "유튜브에 사칭하는 광고가 있어 제보합니다.", "category": "서비스 피드백"},
+        {"content": "TV모니터 미러링 기능 추가해 주시기를 바래봅니다.", "category": "서비스 피드백"},
+        {"content": "책 도착했는데 1권만 배송됐어요. 나머지 2권은 언제 배송될까요?", "category": "서비스 피드백"},
+        {"content": "오프라인초대 다 마감된건가요? 연락을 못받은거면 탈락 된건가요?", "category": "서비스 피드백"},
+        {"content": "홍매화반 교재 언제 보내주세요?", "category": "서비스 피드백"},
+        {"content": "상품 변경 칸이 없어서요~ 변경이 가능할까요?", "category": "서비스 피드백"},
+
+        # ========== 불편사항 (10개) - 불만, 답답함, 소외감, 부정적 감정 ==========
+        {"content": "앱이 자꾸 튕겨요. 너무 답답합니다.", "category": "불편사항"},
+        {"content": "결제를 했는데 강의가 안 열려요. 정말 불편합니다.", "category": "불편사항"},
+        {"content": "매번 같은 질문인데 왜 답변을 안 해주시는 건가요? 소통이 안 되는 느낌입니다.", "category": "불편사항"},
+        {"content": "구독료 대비 콘텐츠가 너무 적은 것 같아요.", "category": "불편사항"},
+        {"content": "여전히 소외감이 느껴집니다. 시장은 좋은데 우리종목 대부분 마이너스입니다.", "category": "불편사항"},
+        {"content": "종목이 너무많습니다. 원금 1억이 가치없는 휴지가 된것같습니다.", "category": "불편사항"},
+        {"content": "비중 평단을 제시하지 않아서 정말 답답합니다.", "category": "불편사항"},
+        {"content": "좋은기업만 알려주시지 비중을 안알려주셔서 40만원에 산분도 90만원에 산분도 있어요.", "category": "불편사항"},
+        {"content": "일주일에 한번도 안 올라오는 컨텐츠에 무엇을 기대할까요...", "category": "불편사항"},
+        {"content": "문의를 드렸는데 답이 없네요. 실망입니다.", "category": "불편사항"},
+
+        # ========== 일상·공감 (10개) - 가입인사, 안부, 축하 ==========
+        {"content": "새해 복 많이 받으세요!", "category": "일상·공감"},
+        {"content": "축하드립니다! 너무 너무 축하드려요.", "category": "일상·공감"},
+        {"content": "주말은 잘 쉬시길 바랍니다.", "category": "일상·공감"},
+        {"content": "안녕하세요 가입인사드립니다. 동행하게 되어 기쁜마음입니다.", "category": "일상·공감"},
+        {"content": "1등 매니져 따라하기 3기 가입인사드립니다.", "category": "일상·공감"},
+        {"content": "오늘 아침 브리핑 시원합니다~~ 오늘도 홧팅입니다!", "category": "일상·공감"},
+        {"content": "원전 월요일 가겠죠? 기다림의 미학입니다.", "category": "일상·공감"},
+        {"content": "오래 기다린만큼 많이 기대됩니다. 열심히 따라해보려구요.", "category": "일상·공감"},
+        {"content": "두환쌤 인기 때문인지 이상한 사람들이 많이 생기네요. 마음이 아픕니다.", "category": "일상·공감"},
+        {"content": "요즘 부담감이 심해보여 한마디 남깁니다. 너무 큰 책임감으로 스스로를 옥죄지마세요.", "category": "일상·공감"},
     ]
 
-    def __init__(self, collection_name: str = "classification_guide"):
+    def __init__(self, collection_name: str = "classification_guide", use_llm_fallback: bool = False, confidence_threshold: float = 0.3):
         """
         VectorContentClassifier 초기화
 
         Args:
             collection_name: ChromaDB 컬렉션 이름
+            use_llm_fallback: confidence가 낮을 때 LLM으로 재분류 여부
+            confidence_threshold: LLM fallback을 위한 confidence 임계값
         """
         self.collection_name = collection_name
+        self.use_llm_fallback = use_llm_fallback
+        self.confidence_threshold = confidence_threshold
+        self.llm_classifier = None
+        self.llm_fallback_count = 0
+
         self.store = ChromaVectorStore(
             collection_name=collection_name,
             persist_directory="./chroma_db"
         )
+
+        # LLM fallback 활성화시 분류기 초기화
+        if use_llm_fallback:
+            try:
+                self.llm_classifier = ContentClassifier()
+            except Exception as e:
+                print(f"⚠️ LLM 분류기 초기화 실패: {e}")
+                self.use_llm_fallback = False
 
         # 학습 예제가 저장되어 있는지 확인
         if self.store.collection.count() == 0:
@@ -126,19 +140,20 @@ class VectorContentClassifier:
 
     def classify_content(self, content: str) -> Dict[str, Any]:
         """
-        단일 콘텐츠를 벡터 유사도로 분류
+        단일 콘텐츠를 벡터 유사도로 분류 (하이브리드: low confidence시 LLM fallback)
 
         Args:
             content: 분류할 콘텐츠 텍스트
 
         Returns:
-            {"category": str, "confidence": float, "similar_example": str}
+            {"category": str, "confidence": float, "similar_example": str, "method": str}
         """
         if not content or len(content.strip()) == 0:
             return {
                 "category": "내용 없음",
                 "confidence": 0.0,
-                "similar_example": ""
+                "similar_example": "",
+                "method": "empty"
             }
 
         # 가장 유사한 예제 검색
@@ -152,20 +167,36 @@ class VectorContentClassifier:
             category = top_match["metadata"].get("category", "미분류")
 
             # 거리를 confidence로 변환 (거리가 가까울수록 높은 confidence)
-            # distance는 0에 가까울수록 유사함
             distance = top_match.get("distance", 1.0)
             confidence = max(0.0, min(1.0, 1.0 - distance))
+
+            # LLM fallback: confidence가 낮으면 LLM으로 재분류
+            if self.use_llm_fallback and self.llm_classifier and confidence < self.confidence_threshold:
+                try:
+                    llm_result = self.llm_classifier.classify_content(content)
+                    self.llm_fallback_count += 1
+                    return {
+                        "category": llm_result.get("category", category),
+                        "confidence": 0.8 if llm_result.get("confidence") == "높음" else 0.6,
+                        "similar_example": "",
+                        "method": "llm",
+                        "reason": llm_result.get("reason", "")
+                    }
+                except Exception:
+                    pass  # LLM 실패시 벡터 결과 사용
 
             return {
                 "category": category,
                 "confidence": confidence,
-                "similar_example": top_match["text"][:100]
+                "similar_example": top_match["text"][:100],
+                "method": "vector"
             }
         else:
             return {
                 "category": "미분류",
                 "confidence": 0.0,
-                "similar_example": ""
+                "similar_example": "",
+                "method": "none"
             }
 
     def classify_batch(
@@ -174,7 +205,7 @@ class VectorContentClassifier:
         content_field: str = "message"
     ) -> List[Dict[str, Any]]:
         """
-        여러 콘텐츠를 일괄 분류 (벡터 유사도 기반)
+        여러 콘텐츠를 일괄 분류 (하이브리드: 벡터 + LLM fallback)
 
         Args:
             contents: 분류할 콘텐츠 리스트
@@ -184,6 +215,7 @@ class VectorContentClassifier:
             분류 결과가 추가된 콘텐츠 리스트
         """
         results = []
+        self.llm_fallback_count = 0  # 카운터 리셋
 
         for i, item in enumerate(contents):
             content_text = item.get(content_field, "")
@@ -197,6 +229,11 @@ class VectorContentClassifier:
 
             # 진행 상황 출력 (100건마다)
             if (i + 1) % 100 == 0:
-                print(f"  진행: {i + 1}/{len(contents)} 완료")
+                llm_info = f" (LLM: {self.llm_fallback_count}건)" if self.use_llm_fallback else ""
+                print(f"  진행: {i + 1}/{len(contents)} 완료{llm_info}")
+
+        # 최종 LLM 사용 통계
+        if self.use_llm_fallback and self.llm_fallback_count > 0:
+            print(f"  → LLM fallback 사용: {self.llm_fallback_count}건")
 
         return results

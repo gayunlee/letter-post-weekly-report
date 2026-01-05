@@ -11,7 +11,7 @@ print("데이터 로드 중...", flush=True)
 data_store = ClassifiedDataStore()
 
 this_week = data_store.load_weekly_data('2025-12-29')
-prev_week = data_store.load_weekly_data('2025-12-22')
+prev_week = data_store.load_weekly_data('2025-12-22')  # 2025-12-22 ~ 2025-12-28
 print("✓ 데이터 로드 완료", flush=True)
 
 print("통계 분석 중...", flush=True)
@@ -25,7 +25,7 @@ print(f"✓ 통계 분석 완료 (마스터 {len(stats['master_stats'])}개)", f
 print("리포트 생성 중...", flush=True)
 generator = ReportGenerator()
 report = generator.generate_report(
-    stats, '2025-12-29', '2026-01-05',
+    stats, '2025-12-29', '2026-01-04',
     output_path='./reports/weekly_report_2025-12-29.md'
 )
 print("✓ 리포트 생성 완료", flush=True)
