@@ -126,7 +126,8 @@ class WeeklyAnalytics:
 
         # 이번 주 데이터 집계
         for letter in letters:
-            master_id = letter.get("masterId", "unknown")
+            # actualMasterId 사용 (없으면 masterId)
+            master_id = letter.get("actualMasterId") or letter.get("masterId", "unknown")
             master_stats[master_id]["this_week"]["letters"] += 1
             master_stats[master_id]["this_week"]["total"] += 1
 
@@ -139,13 +140,14 @@ class WeeklyAnalytics:
                 "type": "letter",
                 "content": letter.get("message", "")[:100],
                 "category": category,
-                "createdAt": letter.get("createdAt", "")
+                "createdAt": letter.get("createdAt", ""),
+                "masterName": letter.get("masterName", ""),
+                "masterClubName": letter.get("masterClubName", "")
             })
 
         for post in posts:
-            # 게시판 ID에서 마스터 ID 추출 (필요시)
-            # 현재는 postBoardId를 마스터 구분자로 사용
-            master_id = post.get("postBoardId", "unknown")
+            # actualMasterId 사용 (게시판이 아닌 마스터로 그룹핑)
+            master_id = post.get("actualMasterId") or post.get("postBoardId", "unknown")
             master_stats[master_id]["this_week"]["posts"] += 1
             master_stats[master_id]["this_week"]["total"] += 1
 
@@ -160,19 +162,21 @@ class WeeklyAnalytics:
                 "content": content[:100],
                 "category": category,
                 "title": post.get("title", ""),
-                "createdAt": post.get("createdAt", "")
+                "createdAt": post.get("createdAt", ""),
+                "masterName": post.get("masterName", ""),
+                "masterClubName": post.get("masterClubName", "")
             })
 
         # 전주 데이터 집계
         if previous_letters:
             for letter in previous_letters:
-                master_id = letter.get("masterId", "unknown")
+                master_id = letter.get("actualMasterId") or letter.get("masterId", "unknown")
                 master_stats[master_id]["last_week"]["letters"] += 1
                 master_stats[master_id]["last_week"]["total"] += 1
 
         if previous_posts:
             for post in previous_posts:
-                master_id = post.get("postBoardId", "unknown")
+                master_id = post.get("actualMasterId") or post.get("postBoardId", "unknown")
                 master_stats[master_id]["last_week"]["posts"] += 1
                 master_stats[master_id]["last_week"]["total"] += 1
 

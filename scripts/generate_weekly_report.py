@@ -59,6 +59,11 @@ def main():
         client = BigQueryClient()
         query_with_client = WeeklyDataQuery(client)
 
+        # 마스터 정보 조회
+        print("  마스터 정보 조회 중...")
+        master_info = query_with_client.get_master_info()
+        print(f"  ✓ {len(master_info)}개 마스터/게시판 정보 로드")
+
         weekly_data = query_with_client.get_weekly_data(start_date, end_date)
         letters = weekly_data['letters']
         posts = weekly_data['posts']
@@ -70,6 +75,40 @@ def main():
         if not letters and not posts:
             print("  ❌ 데이터가 없어 리포트를 생성할 수 없습니다.")
             return
+
+        # 게시판 -> 마스터 매핑 조회
+        board_to_master_query = f"""
+        SELECT _id as boardId, masterId
+        FROM `{client.project_id}.us_plus.postboards`
+        """
+        board_to_master = {b['boardId']: b['masterId']
+                           for b in client.execute_query(board_to_master_query)}
+
+        # 편지글: 마스터 이름 추가
+        for item in letters:
+            master_id = item.get('masterId')
+            if master_id and master_id in master_info:
+                item['masterName'] = master_info[master_id]['displayName']
+                item['masterClubName'] = master_info[master_id]['clubName']
+                item['actualMasterId'] = master_id
+            else:
+                item['masterName'] = 'Unknown'
+                item['masterClubName'] = 'Unknown'
+                item['actualMasterId'] = master_id or 'unknown'
+
+        # 게시글: postBoardId를 실제 masterId로 변환
+        for item in posts:
+            board_id = item.get('postBoardId')
+            actual_master_id = board_to_master.get(board_id, board_id)
+
+            if actual_master_id and actual_master_id in master_info:
+                item['masterName'] = master_info[actual_master_id]['displayName']
+                item['masterClubName'] = master_info[actual_master_id]['clubName']
+                item['actualMasterId'] = actual_master_id
+            else:
+                item['masterName'] = 'Unknown'
+                item['masterClubName'] = 'Unknown'
+                item['actualMasterId'] = actual_master_id or 'unknown'
 
         # 콘텐츠 분류 (벡터 기반)
         print("  📝 콘텐츠 분류 (벡터 유사도 기반)")

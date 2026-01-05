@@ -153,3 +153,62 @@ class WeeklyDataQuery:
         end_date = (prev_sunday + timedelta(days=1)).strftime('%Y-%m-%d')
 
         return start_date, end_date
+
+    def get_master_info(self) -> Dict[str, Dict[str, Any]]:
+        """
+        마스터 정보 조회 (ID -> 이름 매핑)
+        postBoardId도 포함하여 게시판 -> 마스터 매핑 제공
+
+        Returns:
+            {
+                "id": {
+                    "name": str,
+                    "displayName": str,
+                    "clubName": str
+                }
+            }
+        """
+        # 마스터 정보 조회
+        master_query = f"""
+        SELECT
+            _id as masterId,
+            name,
+            displayName,
+            clubName
+        FROM `{self.project_id}.{self.dataset_id}.masters`
+        WHERE deleted = 'false'
+        """
+
+        masters = self.client.execute_query(master_query)
+
+        # ID를 키로 하는 딕셔너리로 변환
+        master_dict = {}
+        for master in masters:
+            master_id = master.get('masterId')
+            if master_id:
+                master_info = {
+                    'name': master.get('name', ''),
+                    'displayName': master.get('displayName', ''),
+                    'clubName': master.get('clubName', '')
+                }
+                master_dict[master_id] = master_info
+
+        # 게시판 -> 마스터 매핑 추가
+        board_query = f"""
+        SELECT
+            _id as boardId,
+            masterId,
+            name as boardName
+        FROM `{self.project_id}.{self.dataset_id}.postboards`
+        """
+
+        boards = self.client.execute_query(board_query)
+
+        # postBoardId를 키로 추가 (masterId 정보 복사)
+        for board in boards:
+            board_id = board.get('boardId')
+            master_id = board.get('masterId')
+            if board_id and master_id and master_id in master_dict:
+                master_dict[board_id] = master_dict[master_id].copy()
+
+        return master_dict
