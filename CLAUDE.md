@@ -4,129 +4,92 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a **weekly report generation system** that analyzes user-generated content (letters and posts) from a financial content platform. The system queries BigQuery, classifies content using AI/ML techniques, and generates comprehensive weekly insight reports for platform operators.
+주간 리포트 자동 생성 시스템 - 금융 콘텐츠 플랫폼의 편지글/게시글을 분석하여 인사이트 리포트 생성
 
 ### Key Concepts
 
-- **Masters (마스터)**: Financial content creators who run investment education communities
-- **Subscribers (구독자)**: Users who subscribe to masters' content
-- **Letters (편지글)**: Private messages sent to masters
-- **Posts (게시글)**: Public board posts within each master's community
-- **Official Clubs (오피셜클럽)**: Individual communities run by each master
+- **마스터 (Masters)**: 투자 교육 커뮤니티를 운영하는 금융 콘텐츠 크리에이터
+- **편지글 (Letters)**: 구독자가 마스터에게 보내는 개인 메시지
+- **게시글 (Posts)**: 각 마스터 커뮤니티 게시판의 게시글
+- **오피셜클럽**: 각 마스터가 운영하는 개별 커뮤니티
 
-Content includes investment questions, emotional support messages, user-to-user information sharing, service improvement suggestions, complaints, and feedback.
+## Commands
 
-## Data Architecture
+```bash
+# 의존성 설치
+pip install -r requirements.txt
 
-### BigQuery Access
-- Authentication: `accountKey.json` (service account key file)
-- The BigQuery tables contain letter and post data with metadata about masters, subscribers, timestamps, and content
-- Data needs to be queried by weekly date ranges for report generation
+# 주간 리포트 생성 (지난 주 데이터)
+python scripts/generate_weekly_report.py
 
-### Content Classification System
-The system must classify content into categories such as:
-- Service improvement suggestions (서비스개선점)
-- Informational posts (정보성 글)
-- Gratitude/testimonials (감사·후기)
-- Investment questions (투자 질문)
-- Complaints (불편사항)
-- User-to-user information sharing (정보공유)
+# 특정 기간 리포트 생성
+python scripts/generate_custom_week_report.py  # 날짜 입력 필요
 
-Classification approach:
-1. Query weekly data from BigQuery
-2. Vectorize content for semantic search/classification
-3. Use few-shot learning with examples from `example.md` to guide classification
-4. Label data based on classification results
-5. Generate statistics and insights
+# 전주 데이터 생성 (비교용)
+python scripts/generate_previous_week.py
+
+# 개별 테스트
+python scripts/test_classifier.py      # 분류기 테스트
+python scripts/test_vectorstore.py     # 벡터 스토어 테스트
+python scripts/explore_bigquery.py     # BigQuery 스키마 탐색
+```
+
+## Architecture
+
+```
+src/
+├── bigquery/           # BigQuery 연동
+│   ├── client.py       # BigQueryClient - 쿼리 실행
+│   └── queries.py      # WeeklyDataQuery - 주간 데이터 조회 (letters, posts)
+├── classifier/         # 콘텐츠 분류
+│   ├── content_classifier.py   # ContentClassifier - Claude API 기반 few-shot 분류
+│   └── vector_classifier.py    # VectorContentClassifier - 벡터 유사도 기반 분류
+├── vectorstore/        # 벡터 저장소
+│   └── chroma_store.py # ChromaVectorStore - ChromaDB 래퍼
+├── reporter/           # 리포트 생성
+│   ├── analytics.py    # WeeklyAnalytics - 통계 분석
+│   └── report_generator.py  # ReportGenerator - 마크다운 리포트 생성
+└── storage/            # 데이터 저장
+    └── data_store.py   # ClassifiedDataStore - 분류된 데이터 캐싱
+```
+
+### Pipeline Flow
+
+1. **BigQuery 조회**: `WeeklyDataQuery.get_weekly_data()` → 편지/게시글 조회
+2. **콘텐츠 분류**: `VectorContentClassifier.classify_batch()` → 5개 카테고리로 분류
+3. **벡터 저장**: `ChromaVectorStore.add_contents_batch()` → 시맨틱 검색용 저장
+4. **통계 분석**: `WeeklyAnalytics.analyze_weekly_data()` → 전주 대비 통계
+5. **리포트 생성**: `ReportGenerator.generate_report()` → 마크다운 출력
+
+### Classification Categories
+
+- 감사·후기: 마스터에 대한 감사, 긍정적 피드백
+- 질문·토론: 포트폴리오, 종목, 투자 전략 질문
+- 정보성 글: 투자 경험 공유, 종목 분석
+- 서비스 피드백: 플랫폼 개선점, 불편사항
+- 일상·공감: 안부, 축하, 공감 표현
+
+## Environment Setup
+
+```bash
+# .env 파일 생성 (.env.example 참고)
+ANTHROPIC_API_KEY=your_api_key
+GOOGLE_APPLICATION_CREDENTIALS=./accountKey.json
+BIGQUERY_PROJECT_ID=your_project
+REPORT_OUTPUT_DIR=./reports
+```
+
+## Data Storage
+
+- `data/classified_data/`: 분류된 주간 데이터 (JSON)
+- `data/stats/`: 주간 통계 요약
+- `chroma_db/`: ChromaDB 벡터 저장소
+- `reports/`: 생성된 마크다운 리포트
 
 ## Report Format
 
-The output report must follow the structure in `example.md`:
-
-### Required Sections
-1. **핵심 요약 (Executive Summary)**: Overall metrics table with week-over-week comparison
-2. **오피셜클럽별 상세 (Details by Official Club)**: Per-master breakdowns including:
-   - Letter/post count table with previous week comparison
-   - 주요 내용 (Key Content): Representative quotes and themes
-   - 플랫폼/서비스 피드백 (Platform/Service Feedback): Service improvement opportunities
-   - 체크 포인트 (Check Points): Action items and observations
-
-### Key Metrics to Track
-- Total letter count (편지 건수)
-- Total post count (게시글 건수)
-- Week-over-week changes (증감)
-- Per-master breakdowns
-- Content category distributions
-
-### Report Style Guidelines
-- Use Korean language throughout
-- Include direct quotes from user content in italics (e.g., _"quote here"_)
-- Provide week-over-week comparison tables
-- Highlight actionable insights with arrow indicators (_→ recommendation_)
-- Use markdown tables for statistics
-- Group masters by activity level (main masters vs. "기타 마스터")
-
-## Development Workflow
-
-### Initial Setup
-```bash
-# Install dependencies (to be created)
-pip install -r requirements.txt  # if exists
-
-# Set up BigQuery authentication
-export GOOGLE_APPLICATION_CREDENTIALS="./accountKey.json"
-```
-
-### Data Query Pattern
-1. Define date ranges for current week and previous week
-2. Query both letter and post tables from BigQuery
-3. Retrieve text content along with metadata (master_id, created_at, etc.)
-4. Sample data first to understand schema before full queries
-
-### Classification Pipeline
-1. Load sample data and `example.md` to establish classification patterns
-2. Implement vectorization (consider using embeddings from OpenAI, Anthropic, or open-source models)
-3. Use few-shot prompting with examples to classify content
-4. Store vectors and labels for efficient reprocessing
-5. Generate statistics from labeled data
-
-### Report Generation
-1. Aggregate classified data by master and category
-2. Calculate week-over-week metrics
-3. Extract representative quotes for each category
-4. Identify recurring themes/FAQ items
-5. Format output matching `example.md` structure
-
-## Important Constraints
-
-### Data Privacy
-- `accountKey.json` contains sensitive credentials - never commit changes to this file
-- User content may contain personal information - handle appropriately
-- Generated reports are for internal platform use
-
-### Accuracy Requirements
-- Statistics must be precise and verifiable
-- Classification should be consistent across similar content
-- Week-over-week comparisons must use exact date ranges
-- Representative quotes must be actual user content (no fabrication)
-
-### Classification Quality
-- Use few-shot learning to improve classification accuracy
-- Vectorization enables semantic similarity matching
-- Consider edge cases where content fits multiple categories
-- Validate classification results against example report patterns
-
-## Technical Considerations
-
-When implementing this system:
-- BigQuery queries should be efficient and avoid unnecessary data transfer
-- Vector storage should support incremental updates for new weekly data
-- Classification prompts should reference `example.md` patterns
-- Report generation should be reproducible with same input data
-- Consider caching/storing vectors to avoid reprocessing historical data
-
-## File References
-
-- `requirements.md`: Original Korean requirements document (lines 1-37)
-- `example.md`: Complete example report for 2025.12.22-28 week (lines 1-575)
-- `accountKey.json`: BigQuery service account credentials (DO NOT MODIFY)
+`example.md` 형식을 따름:
+- 핵심 요약: 전체 편지/게시글 통계 + 전주 대비 증감
+- 마스터별 상세: 통계 테이블, 주요 내용, 서비스 피드백, 체크 포인트
+- 직접 인용은 이탤릭 (_"인용문"_)
+- 개선 권고는 화살표 표시 (_→ 권고사항_)

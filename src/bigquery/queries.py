@@ -48,7 +48,7 @@ class WeeklyDataQuery:
             createdAt >= '{start_date}'
             AND createdAt < '{end_date}'
             AND isBlock = 'false'
-            AND type = 'letter'
+            AND type = 'LETTER'
         ORDER BY createdAt DESC
         """
 

@@ -92,12 +92,12 @@ def generate_week_data(start_date, end_date, data_store, master_info=None):
 
 def main():
     # 대상 주간
-    target_start = "2025-12-15"
-    target_end = "2025-12-22"  # 12-21 다음날까지 (exclusive)
+    target_start = "2025-12-22"
+    target_end = "2025-12-29"  # 12-28 다음날까지 (exclusive)
 
     # 전주
-    prev_start = "2025-12-08"
-    prev_end = "2025-12-15"
+    prev_start = "2025-12-15"
+    prev_end = "2025-12-22"
 
     print("="*60)
     print("📊 특정 주간 리포트 생성")

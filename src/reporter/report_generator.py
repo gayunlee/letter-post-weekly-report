@@ -160,7 +160,7 @@ markdown 불릿 포인트 형식으로 작성해주세요."""
 
         details = "# 1. 마스터별 상세\n\n"
 
-        for i, (master_id, data) in enumerate(sorted_masters, 1):
+        for i, (master_group_name, data) in enumerate(sorted_masters, 1):
             if data["this_week"]["total"] == 0:
                 continue
 
@@ -171,16 +171,11 @@ markdown 불릿 포인트 형식으로 작성해주세요."""
             # 마스터별 요약 문구 생성
             summary_text = self._generate_master_summary(data)
 
-            # 마스터 이름과 소속 클럽 가져오기
-            master_name = master_id
-            club_names = set()
+            # 마스터 그룹명 사용 (숫자 제거된 이름)
+            master_name = master_group_name
 
-            if data["contents"] and len(data["contents"]) > 0:
-                for content in data["contents"]:
-                    if 'masterName' in content:
-                        master_name = content['masterName']
-                    if 'masterClubName' in content:
-                        club_names.add(content['masterClubName'])
+            # 클럽명은 data["club_names"]에서 가져옴 (analytics에서 수집)
+            club_names = data.get("club_names", set())
 
             # 클럽명 리스트
             clubs_text = ", ".join(sorted(club_names)) if club_names else "정보 없음"

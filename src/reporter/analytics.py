@@ -1,4 +1,5 @@
 """주간 리포트를 위한 통계 분석 모듈"""
+import re
 from typing import List, Dict, Any
 from collections import defaultdict, Counter
 
@@ -9,6 +10,16 @@ class WeeklyAnalytics:
     def __init__(self):
         """WeeklyAnalytics 초기화"""
         pass
+
+    def _get_master_group_name(self, master_name: str) -> str:
+        """
+        마스터 이름에서 숫자를 제거하여 그룹명 반환
+        예: 서재형2 -> 서재형, 서재형3 -> 서재형
+        """
+        if not master_name:
+            return "Unknown"
+        # 이름 끝의 숫자 제거 (예: 서재형2 -> 서재형)
+        return re.sub(r'\d+$', '', master_name).strip()
 
     def analyze_weekly_data(
         self,
@@ -104,16 +115,17 @@ class WeeklyAnalytics:
         previous_posts: List[Dict[str, Any]] = None
     ) -> Dict[str, Dict[str, Any]]:
         """
-        마스터별 통계 계산
+        마스터별 통계 계산 (동일 마스터의 여러 클럽 합산)
 
         Returns:
             {
-                "master_id": {
+                "master_group_name": {
                     "this_week": {"letters": int, "posts": int, "total": int},
                     "last_week": {"letters": int, "posts": int, "total": int},
                     "change": {"letters": int, "posts": int, "total": int},
                     "categories": {"감사·후기": int, ...},
-                    "contents": [...]
+                    "contents": [...],
+                    "club_names": set()  # 소속 클럽들
                 }
             }
         """
@@ -121,74 +133,101 @@ class WeeklyAnalytics:
             "this_week": {"letters": 0, "posts": 0, "total": 0},
             "last_week": {"letters": 0, "posts": 0, "total": 0},
             "categories": defaultdict(int),
-            "contents": []
+            "contents": [],
+            "club_names": set()
         })
 
         # 이번 주 데이터 집계
         for letter in letters:
-            # actualMasterId 사용 (없으면 masterId)
-            master_id = letter.get("actualMasterId") or letter.get("masterId", "unknown")
-            master_stats[master_id]["this_week"]["letters"] += 1
-            master_stats[master_id]["this_week"]["total"] += 1
+            # masterName에서 숫자를 제거해 그룹화
+            master_name = letter.get("masterName", "Unknown")
+            master_group = self._get_master_group_name(master_name)
+
+            master_stats[master_group]["this_week"]["letters"] += 1
+            master_stats[master_group]["this_week"]["total"] += 1
+
+            # 클럽명 수집
+            club_name = letter.get("masterClubName", "")
+            if club_name:
+                master_stats[master_group]["club_names"].add(club_name)
 
             # 카테고리 집계
             category = letter.get("classification", {}).get("category", "미분류")
-            master_stats[master_id]["categories"][category] += 1
+            master_stats[master_group]["categories"][category] += 1
 
             # 콘텐츠 저장
-            master_stats[master_id]["contents"].append({
+            master_stats[master_group]["contents"].append({
                 "type": "letter",
                 "content": letter.get("message", "")[:100],
                 "category": category,
                 "createdAt": letter.get("createdAt", ""),
-                "masterName": letter.get("masterName", ""),
-                "masterClubName": letter.get("masterClubName", "")
+                "masterName": master_name,
+                "masterClubName": club_name
             })
 
         for post in posts:
-            # actualMasterId 사용 (게시판이 아닌 마스터로 그룹핑)
-            master_id = post.get("actualMasterId") or post.get("postBoardId", "unknown")
-            master_stats[master_id]["this_week"]["posts"] += 1
-            master_stats[master_id]["this_week"]["total"] += 1
+            # masterName에서 숫자를 제거해 그룹화
+            master_name = post.get("masterName", "Unknown")
+            master_group = self._get_master_group_name(master_name)
+
+            master_stats[master_group]["this_week"]["posts"] += 1
+            master_stats[master_group]["this_week"]["total"] += 1
+
+            # 클럽명 수집
+            club_name = post.get("masterClubName", "")
+            if club_name:
+                master_stats[master_group]["club_names"].add(club_name)
 
             # 카테고리 집계
             category = post.get("classification", {}).get("category", "미분류")
-            master_stats[master_id]["categories"][category] += 1
+            master_stats[master_group]["categories"][category] += 1
 
             # 콘텐츠 저장
             content = post.get("textBody") or post.get("body", "")
-            master_stats[master_id]["contents"].append({
+            master_stats[master_group]["contents"].append({
                 "type": "post",
                 "content": content[:100],
                 "category": category,
                 "title": post.get("title", ""),
                 "createdAt": post.get("createdAt", ""),
-                "masterName": post.get("masterName", ""),
-                "masterClubName": post.get("masterClubName", "")
+                "masterName": master_name,
+                "masterClubName": club_name
             })
 
         # 전주 데이터 집계
         if previous_letters:
             for letter in previous_letters:
-                master_id = letter.get("actualMasterId") or letter.get("masterId", "unknown")
-                master_stats[master_id]["last_week"]["letters"] += 1
-                master_stats[master_id]["last_week"]["total"] += 1
+                master_name = letter.get("masterName", "Unknown")
+                master_group = self._get_master_group_name(master_name)
+                master_stats[master_group]["last_week"]["letters"] += 1
+                master_stats[master_group]["last_week"]["total"] += 1
+
+                # 클럽명 수집
+                club_name = letter.get("masterClubName", "")
+                if club_name:
+                    master_stats[master_group]["club_names"].add(club_name)
 
         if previous_posts:
             for post in previous_posts:
-                master_id = post.get("actualMasterId") or post.get("postBoardId", "unknown")
-                master_stats[master_id]["last_week"]["posts"] += 1
-                master_stats[master_id]["last_week"]["total"] += 1
+                master_name = post.get("masterName", "Unknown")
+                master_group = self._get_master_group_name(master_name)
+                master_stats[master_group]["last_week"]["posts"] += 1
+                master_stats[master_group]["last_week"]["total"] += 1
+
+                # 클럽명 수집
+                club_name = post.get("masterClubName", "")
+                if club_name:
+                    master_stats[master_group]["club_names"].add(club_name)
 
         # 증감 계산
-        for master_id in master_stats:
-            master_stats[master_id]["change"] = {
-                "letters": (master_stats[master_id]["this_week"]["letters"] -
-                           master_stats[master_id]["last_week"]["letters"]),
-                "posts": (master_stats[master_id]["this_week"]["posts"] -
-                         master_stats[master_id]["last_week"]["posts"]),
-                "total": (master_stats[master_id]["this_week"]["total"] -
-                         master_stats[master_id]["last_week"]["total"])
+        for master_group in master_stats:
+            master_stats[master_group]["change"] = {
+                "letters": (master_stats[master_group]["this_week"]["letters"] -
+                           master_stats[master_group]["last_week"]["letters"]),
+                "posts": (master_stats[master_group]["this_week"]["posts"] -
+                         master_stats[master_group]["last_week"]["posts"]),
+                "total": (master_stats[master_group]["this_week"]["total"] -
+                         master_stats[master_group]["last_week"]["total"])
             }
 
         return dict(master_stats)
