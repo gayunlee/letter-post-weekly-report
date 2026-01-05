@@ -2,6 +2,7 @@
 import re
 from typing import List, Dict, Any
 from collections import defaultdict, Counter
+from src.utils.text_utils import clean_text
 
 
 class WeeklyAnalytics:
@@ -158,7 +159,7 @@ class WeeklyAnalytics:
             # 콘텐츠 저장
             master_stats[master_group]["contents"].append({
                 "type": "letter",
-                "content": letter.get("message", "")[:100],
+                "content": clean_text(letter.get("message", ""), 150),
                 "category": category,
                 "createdAt": letter.get("createdAt", ""),
                 "masterName": master_name,
@@ -186,7 +187,7 @@ class WeeklyAnalytics:
             content = post.get("textBody") or post.get("body", "")
             master_stats[master_group]["contents"].append({
                 "type": "post",
-                "content": content[:100],
+                "content": clean_text(content, 150),
                 "category": category,
                 "title": post.get("title", ""),
                 "createdAt": post.get("createdAt", ""),
@@ -273,7 +274,7 @@ class WeeklyAnalytics:
             if classification.get("category") == "서비스 피드백":
                 feedbacks.append({
                     "type": "letter",
-                    "content": letter.get("message", "")[:200],
+                    "content": clean_text(letter.get("message", ""), 200),
                     "reason": classification.get("reason", ""),
                     "masterId": letter.get("masterId", "unknown"),
                     "createdAt": letter.get("createdAt", "")
@@ -286,7 +287,7 @@ class WeeklyAnalytics:
                 feedbacks.append({
                     "type": "post",
                     "title": post.get("title", ""),
-                    "content": content[:200],
+                    "content": clean_text(content, 200),
                     "reason": classification.get("reason", ""),
                     "masterId": post.get("postBoardId", "unknown"),
                     "createdAt": post.get("createdAt", "")
@@ -319,7 +320,7 @@ class WeeklyAnalytics:
             if letter.get("classification", {}).get("category") == category:
                 contents.append({
                     "type": "letter",
-                    "content": letter.get("message", "")[:200],
+                    "content": clean_text(letter.get("message", ""), 200),
                     "masterId": letter.get("masterId", ""),
                     "createdAt": letter.get("createdAt", "")
                 })
@@ -330,7 +331,7 @@ class WeeklyAnalytics:
                 contents.append({
                     "type": "post",
                     "title": post.get("title", ""),
-                    "content": content_text[:200],
+                    "content": clean_text(content_text, 200),
                     "masterId": post.get("postBoardId", ""),
                     "createdAt": post.get("createdAt", ""),
                     "likeCount": post.get("likeCount", 0),

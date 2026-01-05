@@ -126,6 +126,83 @@ class SlackNotifier:
         response = requests.post(url, headers=headers, json=payload)
         return response.json()
 
+    def upload_file_to_thread(
+        self,
+        file_path: str,
+        thread_ts: str,
+        title: str = None,
+        comment: str = None
+    ) -> Dict[str, Any]:
+        """
+        스레드에 파일 업로드 (새 API 사용)
+
+        Args:
+            file_path: 업로드할 파일 경로
+            thread_ts: 스레드 타임스탬프
+            title: 파일 제목
+            comment: 파일과 함께 보낼 코멘트
+
+        Returns:
+            {"ok": bool, "file_url": str}
+        """
+        headers = {
+            "Authorization": f"Bearer {self.bot_token}"
+        }
+
+        filename = os.path.basename(file_path)
+        file_size = os.path.getsize(file_path)
+
+        # 1. 업로드 URL 요청
+        get_url_response = requests.post(
+            f"{self.base_url}/files.getUploadURLExternal",
+            headers=headers,
+            data={
+                'filename': filename,
+                'length': file_size
+            }
+        )
+        get_url_result = get_url_response.json()
+
+        if not get_url_result.get("ok"):
+            return {"ok": False, "error": get_url_result.get("error", "URL 요청 실패")}
+
+        upload_url = get_url_result.get("upload_url")
+        file_id = get_url_result.get("file_id")
+
+        # 2. 파일 업로드
+        with open(file_path, 'rb') as f:
+            upload_response = requests.post(upload_url, files={'file': f})
+
+        if upload_response.status_code != 200:
+            return {"ok": False, "error": "파일 업로드 실패"}
+
+        # 3. 업로드 완료 및 채널에 공유
+        complete_response = requests.post(
+            f"{self.base_url}/files.completeUploadExternal",
+            headers={**headers, "Content-Type": "application/json"},
+            json={
+                'files': [{'id': file_id, 'title': title or filename}],
+                'channel_id': self.channel_id,
+                'thread_ts': thread_ts,
+                'initial_comment': comment or ''
+            }
+        )
+        complete_result = complete_response.json()
+
+        if complete_result.get("ok"):
+            files_info = complete_result.get("files", [])
+            file_url = files_info[0].get("permalink", "") if files_info else ""
+            return {
+                "ok": True,
+                "file_url": file_url,
+                "file_id": file_id
+            }
+        else:
+            return {
+                "ok": False,
+                "error": complete_result.get("error", "완료 처리 실패")
+            }
+
     @staticmethod
     def get_week_label(date_str: str) -> str:
         """

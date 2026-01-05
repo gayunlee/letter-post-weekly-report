@@ -12,6 +12,7 @@ from src.reporter.analytics import WeeklyAnalytics
 from src.reporter.report_generator import ReportGenerator
 from src.integrations.notion_client import NotionReportClient
 from src.integrations.slack_client import SlackNotifier
+from src.utils.excel_exporter import export_to_excel
 
 
 def generate_week_data(start_date, end_date, data_store, master_info=None):
@@ -93,13 +94,13 @@ def generate_week_data(start_date, end_date, data_store, master_info=None):
 
 
 def main():
-    # 대상 주간
-    target_start = "2025-12-22"
-    target_end = "2025-12-29"  # 12-28 다음날까지 (exclusive)
+    # 대상 주간 (12월 29일 ~ 1월 4일)
+    target_start = "2025-12-29"
+    target_end = "2026-01-05"  # 1-4 다음날까지 (exclusive)
 
-    # 전주
-    prev_start = "2025-12-15"
-    prev_end = "2025-12-22"
+    # 전주 (12월 22일 ~ 12월 28일)
+    prev_start = "2025-12-22"
+    prev_end = "2025-12-29"
 
     print("="*60)
     print("📊 특정 주간 리포트 생성")
@@ -177,8 +178,15 @@ def main():
     print(f"✓ 리포트 생성 완료")
     print(f"✓ 저장 위치: {output_path}")
 
-    # 6. Notion에 리포트 업로드
-    print(f"\n[6단계] Notion 업로드")
+    # 6. 엑셀 파일 생성
+    print(f"\n[6단계] 엑셀 파일 생성")
+    excel_filename = f"weekly_data_{target_start}.xlsx"
+    excel_path = os.path.join(output_dir, excel_filename)
+    export_to_excel(classified_letters, classified_posts, excel_path)
+    print(f"✓ 엑셀 파일 생성: {excel_path}")
+
+    # 7. Notion에 리포트 업로드
+    print(f"\n[7단계] Notion 업로드")
     try:
         notion_client = NotionReportClient()
         week_label = SlackNotifier.get_week_label(target_start)
@@ -204,8 +212,8 @@ def main():
         print(f"⚠️  Notion 업로드 실패: {str(e)}")
         notion_url = None
 
-    # 7. Slack 알림 전송
-    print(f"\n[7단계] Slack 알림 전송")
+    # 8. Slack 알림 전송 및 엑셀 파일 업로드
+    print(f"\n[8단계] Slack 알림 전송")
     if notion_url:
         try:
             slack_client = SlackNotifier()
@@ -218,6 +226,20 @@ def main():
 
             if result.get("ok"):
                 print(f"✓ Slack 알림 전송 완료")
+
+                # 엑셀 파일을 스레드에 업로드
+                message_ts = result.get("message_ts")
+                if message_ts and os.path.exists(excel_path):
+                    file_result = slack_client.upload_file_to_thread(
+                        file_path=excel_path,
+                        thread_ts=message_ts,
+                        title=f"원본 데이터 ({target_start})",
+                        comment="📎 라벨링된 원본 데이터 파일입니다."
+                    )
+                    if file_result.get("ok"):
+                        print(f"✓ 엑셀 파일 업로드 완료")
+                    else:
+                        print(f"⚠️  엑셀 파일 업로드 실패: {file_result.get('error')}")
             else:
                 print(f"⚠️  Slack 알림 전송 실패: {result.get('error')}")
         except Exception as e:

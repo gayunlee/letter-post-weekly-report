@@ -198,6 +198,44 @@ class NotionReportClient:
             }
         }
 
+    def add_file_link_to_page(self, page_id: str, file_url: str, file_name: str):
+        """
+        페이지에 파일 다운로드 링크 추가
+
+        Args:
+            page_id: Notion 페이지 ID
+            file_url: 파일 다운로드 URL
+            file_name: 파일명
+        """
+        blocks = [
+            {"type": "divider", "divider": {}},
+            {
+                "type": "callout",
+                "callout": {
+                    "rich_text": [
+                        {
+                            "type": "text",
+                            "text": {"content": "원본 데이터 다운로드: "}
+                        },
+                        {
+                            "type": "text",
+                            "text": {
+                                "content": file_name,
+                                "link": {"url": file_url}
+                            },
+                            "annotations": {"bold": True}
+                        }
+                    ],
+                    "icon": {"emoji": "📎"}
+                }
+            }
+        ]
+
+        self.client.blocks.children.append(
+            block_id=page_id,
+            children=blocks
+        )
+
     def _create_quote(self, text: str) -> Dict[str, Any]:
         """인용문 블록 생성"""
         return {
