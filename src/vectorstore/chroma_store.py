@@ -3,7 +3,7 @@ import os
 from typing import List, Dict, Any, Optional
 import chromadb
 from chromadb.config import Settings
-from anthropic import Anthropic
+from chromadb.utils import embedding_functions
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -11,6 +11,9 @@ load_dotenv()
 
 class ChromaVectorStore:
     """ChromaDB를 사용한 콘텐츠 벡터 저장소"""
+
+    # 한국어 임베딩 모델 (한국어 특화)
+    EMBEDDING_MODEL = "jhgan/ko-sroberta-multitask"
 
     def __init__(
         self,
@@ -33,16 +36,17 @@ class ChromaVectorStore:
             settings=Settings(allow_reset=True)
         )
 
-        # 컬렉션 가져오기 또는 생성
-        self.collection = self.client.get_or_create_collection(
-            name=collection_name,
-            metadata={"description": "주간 콘텐츠 벡터 저장소"}
+        # 한국어 임베딩 함수 설정
+        self.embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name=self.EMBEDDING_MODEL
         )
 
-        # Anthropic 클라이언트 (임베딩용)
-        self.api_key = os.getenv("ANTHROPIC_API_KEY")
-        if self.api_key:
-            self.anthropic_client = Anthropic(api_key=self.api_key)
+        # 컬렉션 가져오기 또는 생성 (한국어 임베딩 적용)
+        self.collection = self.client.get_or_create_collection(
+            name=collection_name,
+            embedding_function=self.embedding_fn,
+            metadata={"description": "주간 콘텐츠 벡터 저장소"}
+        )
 
     def _generate_embedding(self, text: str) -> List[float]:
         """
@@ -209,7 +213,7 @@ class ChromaVectorStore:
 
         # 카테고리별 통계
         category_stats = {}
-        for category in ["감사·후기", "질문·토론", "정보성 글", "서비스 피드백", "일상·공감"]:
+        for category in ["감사·후기", "질문·토론", "정보성 글", "문의사항", "불편사항", "제보/건의", "일상·공감"]:
             results = self.collection.get(
                 where={"category": category}
             )
@@ -226,5 +230,6 @@ class ChromaVectorStore:
         self.client.delete_collection(self.collection_name)
         self.collection = self.client.create_collection(
             name=self.collection_name,
+            embedding_function=self.embedding_fn,
             metadata={"description": "주간 콘텐츠 벡터 저장소"}
         )

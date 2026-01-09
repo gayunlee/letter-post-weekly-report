@@ -262,33 +262,38 @@ class WeeklyAnalytics:
         posts: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """
-        서비스 피드백 추출
+        서비스 관련 피드백 추출 (문의, 불편, 제보/건의)
 
         Returns:
-            [{"content": str, "reason": str, "masterId": str}, ...]
+            [{"content": str, "reason": str, "masterId": str, "category": str}, ...]
         """
         feedbacks = []
+        target_categories = ["서비스 문의", "서비스 불편", "서비스 제보/건의"]
 
         for letter in letters:
             classification = letter.get("classification", {})
-            if classification.get("category") == "서비스 피드백":
+            category = classification.get("category", "")
+            if category in target_categories:
                 feedbacks.append({
                     "type": "letter",
                     "content": clean_text(letter.get("message", ""), 200),
                     "reason": classification.get("reason", ""),
+                    "category": category,
                     "masterId": letter.get("masterId", "unknown"),
                     "createdAt": letter.get("createdAt", "")
                 })
 
         for post in posts:
             classification = post.get("classification", {})
-            if classification.get("category") == "서비스 피드백":
+            category = classification.get("category", "")
+            if category in target_categories:
                 content = post.get("textBody") or post.get("body", "")
                 feedbacks.append({
                     "type": "post",
                     "title": post.get("title", ""),
                     "content": clean_text(content, 200),
                     "reason": classification.get("reason", ""),
+                    "category": category,
                     "masterId": post.get("postBoardId", "unknown"),
                     "createdAt": post.get("createdAt", "")
                 })

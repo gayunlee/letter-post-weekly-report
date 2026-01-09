@@ -2,6 +2,7 @@
 import sys
 import os
 from datetime import datetime
+from typing import List, Dict, Any
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from src.bigquery.client import BigQueryClient
@@ -11,6 +12,44 @@ from src.vectorstore.chroma_store import ChromaVectorStore
 from src.reporter.analytics import WeeklyAnalytics
 from src.reporter.report_generator import ReportGenerator
 from src.storage.data_store import ClassifiedDataStore
+
+
+# 서비스 공지글 필터링 키워드
+FILTER_KEYWORDS = [
+    "channel.io",
+    "어떤 채팅방도 운영하지 않습니다",
+    "어떤 채팅방 · 밴드도 운영하지 않습니다",
+    "문의하기:",
+]
+
+
+def filter_service_notices(items: List[Dict[str, Any]], content_field: str = "message") -> List[Dict[str, Any]]:
+    """
+    서비스 공지글 필터링
+
+    Args:
+        items: 필터링할 아이템 리스트
+        content_field: 콘텐츠 필드명
+
+    Returns:
+        필터링된 아이템 리스트
+    """
+    filtered = []
+    removed_count = 0
+
+    for item in items:
+        content = item.get(content_field, "") or ""
+        is_notice = any(keyword in content for keyword in FILTER_KEYWORDS)
+
+        if is_notice:
+            removed_count += 1
+        else:
+            filtered.append(item)
+
+    if removed_count > 0:
+        print(f"  ⚠️  서비스 공지글 {removed_count}건 필터링됨")
+
+    return filtered
 
 
 def main():
@@ -109,6 +148,12 @@ def main():
                 item['masterName'] = 'Unknown'
                 item['masterClubName'] = 'Unknown'
                 item['actualMasterId'] = actual_master_id or 'unknown'
+
+        # 서비스 공지글 필터링
+        print("  🔍 서비스 공지글 필터링")
+        letters = filter_service_notices(letters, content_field="message")
+        posts = filter_service_notices(posts, content_field="textBody")
+        print()
 
         # 콘텐츠 분류 (벡터 기반)
         print("  📝 콘텐츠 분류 (벡터 유사도 기반)")
