@@ -53,8 +53,14 @@ class NotionReportClient:
         Returns:
             생성된 페이지 정보 {"id": str, "url": str}
         """
+        # 분류 기준 토글 블록 생성
+        classification_guide = self._create_classification_guide_toggle()
+
         # 마크다운을 Notion 블록으로 변환
         blocks = self._markdown_to_blocks(markdown_content)
+
+        # 분류 기준 토글을 맨 앞에 추가
+        blocks = classification_guide + blocks
 
         # 페이지 생성
         page = self.client.pages.create(
@@ -333,6 +339,59 @@ class NotionReportClient:
                 })
 
         return result if result else [{"type": "text", "text": {"content": text}}]
+
+    def _create_classification_guide_toggle(self) -> List[Dict[str, Any]]:
+        """분류 기준 안내 토글 블록 생성"""
+        # 분류 기준 테이블 데이터
+        classification_data = [
+            ["카테고리", "분류 기준", "검토 필요"],
+            ["감사·후기", "감사 표현, 긍정적 투자 경험", "참고용"],
+            ["질문·토론", "투자/종목 관련 질문, 시장 의견", "참고용"],
+            ["정보성 글", "시장/종목 정보 공유", "참고용"],
+            ["서비스 문의", "서비스 이용 방법, 멤버십, 결제 문의", "검토 필요 (우선순위 높음)"],
+            ["서비스 불편", "플랫폼/앱 버그, 서비스 운영 불만", "검토 필요 (우선순위 높음)"],
+            ["서비스 제보/건의", "사칭 제보, 기능 요청, 정책 제안", "검토 필요 (우선순위 중간)"],
+            ["일상·공감", "인사, 안부, 축하, 투자 감정 토로", "참고용"],
+        ]
+
+        # 테이블 행 생성
+        table_rows = []
+        for row in classification_data:
+            cells = []
+            for cell in row:
+                cells.append([{"type": "text", "text": {"content": cell}}])
+            table_rows.append({
+                "type": "table_row",
+                "table_row": {"cells": cells}
+            })
+
+        # 테이블 블록
+        table_block = {
+            "type": "table",
+            "table": {
+                "table_width": 3,
+                "has_column_header": True,
+                "has_row_header": False,
+                "children": table_rows
+            }
+        }
+
+        # 토글 블록 (테이블을 children으로 포함)
+        toggle_block = {
+            "type": "toggle",
+            "toggle": {
+                "rich_text": [
+                    {
+                        "type": "text",
+                        "text": {"content": "📋 분류 기준 안내 (클릭하여 펼치기)"},
+                        "annotations": {"bold": True}
+                    }
+                ],
+                "children": [table_block]
+            }
+        }
+
+        return [toggle_block, {"type": "divider", "divider": {}}]
 
     def get_week_number_korean(self, date_str: str) -> str:
         """

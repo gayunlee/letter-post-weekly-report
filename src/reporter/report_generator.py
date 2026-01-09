@@ -195,13 +195,9 @@ markdown 불릿 포인트 형식으로 작성해주세요."""
 
 {insight['main_content']}
 
-■ 플랫폼/서비스 피드백
+■ 서비스 피드백
 
 {insight['service_feedback']}
-
-■ 체크 포인트
-
-{insight['checkpoints']}
 
 ---
 
@@ -220,37 +216,51 @@ markdown 불릿 포인트 형식으로 작성해주세요."""
             return {
                 "summary": "반응 데이터가 부족하여 상세 분석이 어렵습니다.",
                 "main_content": "- 분석할 콘텐츠가 없습니다.",
-                "service_feedback": "- 서비스 피드백이 없습니다.",
-                "checkpoints": "- 특이사항 없음."
+                "service_feedback": "- 서비스 피드백이 없습니다."
             }
 
-        # 일반 콘텐츠와 서비스 피드백/불편사항 분리
+        # 일반 콘텐츠와 서비스 관련 분리
         general_contents = []
-        feedback_contents = []
-        complaint_contents = []
+        inquiry_contents = []  # 서비스 문의
+        complaint_contents = []  # 서비스 불편
+        suggestion_contents = []  # 서비스 제보/건의
         for c in contents:
             cat = c.get("category", "미분류")
             text = c.get("content", "")
-            if cat == "서비스 피드백":
-                feedback_contents.append(text)
-            elif cat == "불편사항":
+            if cat == "서비스 문의":
+                inquiry_contents.append(text)
+            elif cat == "서비스 불편":
                 complaint_contents.append(text)
+            elif cat == "서비스 제보/건의":
+                suggestion_contents.append(text)
             else:
                 general_contents.append(f"[{cat}] {text}")
 
         # 일반 콘텐츠 (최대 15개)
         general_str = "\n".join(general_contents[:15])
 
-        # 서비스 피드백 + 불편사항 합쳐서 전달
+        # 서비스 관련 피드백 합쳐서 전달
         all_feedback = []
-        if feedback_contents:
-            all_feedback.extend([f"[서비스 피드백] {fb}" for fb in feedback_contents])
         if complaint_contents:
-            all_feedback.extend([f"[불편사항] {cp}" for cp in complaint_contents])
+            all_feedback.extend([f"[서비스 불편] {cp}" for cp in complaint_contents])
+        if inquiry_contents:
+            all_feedback.extend([f"[서비스 문의] {iq}" for iq in inquiry_contents])
+        if suggestion_contents:
+            all_feedback.extend([f"[서비스 제보/건의] {sg}" for sg in suggestion_contents])
         feedback_str = "\n".join([f"- {fb}" for fb in all_feedback]) if all_feedback else "없음"
 
         # 카테고리 통계
         cat_stats = "\n".join([f"- {cat}: {cnt}건" for cat, cnt in categories.items()])
+
+        # 서비스 피드백 개수 요약
+        feedback_count_summary = []
+        if inquiry_contents:
+            feedback_count_summary.append(f"서비스 문의 {len(inquiry_contents)}건")
+        if complaint_contents:
+            feedback_count_summary.append(f"서비스 불편 {len(complaint_contents)}건")
+        if suggestion_contents:
+            feedback_count_summary.append(f"서비스 제보/건의 {len(suggestion_contents)}건")
+        feedback_count_str = ", ".join(feedback_count_summary) if feedback_count_summary else "없음"
 
         prompt = f"""다음은 금융 투자 커뮤니티 "{master_name}" 마스터의 이번 주 이용자 반응 데이터입니다.
 
@@ -264,33 +274,39 @@ markdown 불릿 포인트 형식으로 작성해주세요."""
 [일반 콘텐츠]
 {general_str}
 
-[서비스 피드백 및 불편사항]
+[서비스 관련 피드백] ({feedback_count_str})
 {feedback_str}
 
-위 데이터를 분석하여 다음 4가지를 작성해주세요:
+위 데이터를 분석하여 다음 3가지를 작성해주세요:
 
 1. **summary**: 한 줄 요약 (예: "편지 수는 감소했으나, 포트폴리오 구성 질문이 중심인 주간입니다.")
 
-2. **main_content**: 주요 내용 (2-3개 테마로 분류, 각 테마에 대표 인용문 1-2개 포함)
-   형식:
-   - 테마 설명
-     _"대표 인용문"_
+2. **main_content**: 주요 내용 (2-3개 테마로 분류, 각 테마에 대표 인용문 1개 포함)
+   형식 (중요: 각 테마 항목 사이에 반드시 빈 줄 2개 추가, 인용문은 > 블록으로):
+   **1. 테마 제목 (N건)**
 
-3. **service_feedback**: 플랫폼/서비스 피드백 및 불편사항 분석 ([서비스 피드백 및 불편사항] 기반)
-   - [서비스 피드백]: 기능 문의, 자료 요청 등 중립적 피드백
-   - [불편사항]: 불만, 답답함, 개선 요청 등 부정적 피드백
-   형식:
-   - 피드백/불편사항 요약
-     _"관련 인용문"_
-     _→ 권고사항_
-   (없으면 "- 서비스 피드백 및 불편사항 없음"으로 작성)
+   테마 설명 (1-2문장)
 
-4. **checkpoints**: 체크 포인트 (운영 관점에서 주의할 점 - 불릿 포인트로 1-3개)
-   - 반복되는 불편사항이 있으면 우선 언급
-   - 즉시 대응이 필요한 사안 표시
+   > _"대표 인용문 1개"_
+
+
+   **2. 테마 제목 (N건)**
+
+   테마 설명 (1-2문장)
+
+   > _"대표 인용문 1개"_
+
+3. **service_feedback**: 서비스 관련 피드백 요약
+   - 서비스 피드백이 있다면: 어떤 내용이 있었는지 1-2문장으로 요약하고, 대표 예시 1개 인용
+   - 형식 (인용문은 > 블록으로, 요약과 인용문 사이 빈 줄):
+     OOO 관련 문의/불편이 N건 있었습니다.
+
+     > _"대표 예시"_
+
+   - 없으면: "- 서비스 관련 피드백 없음"
 
 JSON 형식으로 응답해주세요:
-{{"summary": "...", "main_content": "...", "service_feedback": "...", "checkpoints": "..."}}"""
+{{"summary": "...", "main_content": "...", "service_feedback": "..."}}"""
 
         try:
             message = self.client.messages.create(
@@ -315,8 +331,7 @@ JSON 형식으로 응답해주세요:
                 return {
                     "summary": result.get("summary", "분석 결과 없음"),
                     "main_content": result.get("main_content", "- 분석 결과 없음"),
-                    "service_feedback": result.get("service_feedback", "- 서비스 피드백 없음"),
-                    "checkpoints": result.get("checkpoints", "- 특이사항 없음")
+                    "service_feedback": result.get("service_feedback", "- 서비스 피드백 없음")
                 }
 
         except Exception as e:
@@ -344,57 +359,53 @@ JSON 형식으로 응답해주세요:
 
         summary = f"전체 규모는 {trend}했으며, {top_category} 중심의 주간입니다."
 
-        # 주요 내용
+        # 주요 내용 (새 형식: 테마별 구분, > 블록 인용)
+        general_contents = [c for c in contents if c.get("category") not in ["서비스 문의", "서비스 불편", "서비스 제보/건의"]]
+
+        # 카테고리별로 그룹화
         main_parts = []
-        for cat, cnt in sorted(categories.items(), key=lambda x: x[1], reverse=True)[:3]:
-            main_parts.append(f"- {cat}: {cnt}건")
-        main_content = "\n".join(main_parts) if main_parts else "- 분석 데이터 부족"
+        for i, (cat, cnt) in enumerate(sorted(categories.items(), key=lambda x: x[1], reverse=True)[:3], 1):
+            if cat in ["서비스 문의", "서비스 불편", "서비스 제보/건의"]:
+                continue
+            # 해당 카테고리의 예시 1개 찾기
+            example = next((c.get("content", "") for c in general_contents if c.get("category") == cat), "")
+            example_text = f'\n\n> _"{example[:150]}..."_' if example else ""
+            main_parts.append(f"**{i}. {cat} ({cnt}건)**\n\n해당 카테고리의 내용입니다.{example_text}")
 
-        # 샘플 인용문 추가 (서비스 피드백/불편사항 제외)
-        general_contents = [c for c in contents if c.get("category") not in ["서비스 피드백", "불편사항"]]
-        if general_contents:
-            main_content += "\n\n"
-            for c in general_contents[:2]:
-                text = c.get("content", "")
-                if text:
-                    main_content += f"  _\"{text}\"_\n\n"
+        main_content = "\n\n".join(main_parts) if main_parts else "- 분석 데이터 부족"
 
-        # 서비스 피드백 및 불편사항 추출 (라벨링 데이터 기반)
-        feedback_items = []
+        # 서비스 관련 피드백 추출 (라벨링 데이터 기반)
+        inquiry_items = []
         complaint_items = []
+        suggestion_items = []
         for c in contents:
             cat = c.get("category", "")
             text = c.get("content", "")
-            if cat == "서비스 피드백" and text:
-                feedback_items.append(text)
-            elif cat == "불편사항" and text:
+            if cat == "서비스 문의" and text:
+                inquiry_items.append(text)
+            elif cat == "서비스 불편" and text:
                 complaint_items.append(text)
+            elif cat == "서비스 제보/건의" and text:
+                suggestion_items.append(text)
 
+        # 서비스 피드백 요약
         service_feedback_parts = []
-        if complaint_items:
-            service_feedback_parts.append("**[불편사항]**")
-            for item in complaint_items[:3]:
-                service_feedback_parts.append(f"- _\"{item[:100]}{'...' if len(item) > 100 else ''}\"_")
-        if feedback_items:
-            service_feedback_parts.append("**[서비스 피드백]**")
-            for item in feedback_items[:3]:
-                service_feedback_parts.append(f"- _\"{item[:100]}{'...' if len(item) > 100 else ''}\"_")
+        total_feedback = len(inquiry_items) + len(complaint_items) + len(suggestion_items)
 
-        service_feedback = "\n".join(service_feedback_parts) if service_feedback_parts else "- 서비스 피드백 및 불편사항 없음"
+        if total_feedback > 0:
+            if complaint_items:
+                service_feedback_parts.append(f"- 서비스 불편 {len(complaint_items)}건: _\"{complaint_items[0][:80]}...\"_")
+            if inquiry_items:
+                service_feedback_parts.append(f"- 서비스 문의 {len(inquiry_items)}건: _\"{inquiry_items[0][:80]}...\"_")
+            if suggestion_items:
+                service_feedback_parts.append(f"- 서비스 제보/건의 {len(suggestion_items)}건: _\"{suggestion_items[0][:80]}...\"_")
 
-        # 체크포인트
-        checkpoints = []
-        if complaint_items:
-            checkpoints.append(f"- 불편사항 {len(complaint_items)}건 접수됨 - 확인 필요")
-        if feedback_items:
-            checkpoints.append(f"- 서비스 피드백 {len(feedback_items)}건 접수됨")
-        checkpoint_str = "\n".join(checkpoints) if checkpoints else "- 특이사항 없음"
+        service_feedback = "\n".join(service_feedback_parts) if service_feedback_parts else "- 서비스 관련 피드백 없음"
 
         return {
             "summary": summary,
             "main_content": main_content,
-            "service_feedback": service_feedback,
-            "checkpoints": checkpoint_str
+            "service_feedback": service_feedback
         }
 
     def _generate_master_summary(self, master_data: Dict[str, Any]) -> str:
