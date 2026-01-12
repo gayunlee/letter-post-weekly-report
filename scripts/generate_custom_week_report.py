@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from src.bigquery.client import BigQueryClient
 from src.bigquery.queries import WeeklyDataQuery
-from src.classifier.vector_classifier import VectorContentClassifier
+from src.classifier.vector_classifier import VectorContentClassifier, ServiceCategoryReviewer
 from src.storage.data_store import ClassifiedDataStore
 from src.vectorstore.chroma_store import ChromaVectorStore
 from src.reporter.analytics import WeeklyAnalytics
@@ -86,6 +86,18 @@ def generate_week_data(start_date, end_date, data_store, master_info=None):
     classified_letters = classifier.classify_batch(letters, "message") if letters else []
     classified_posts = classifier.classify_batch(posts, "textBody") if posts else []
 
+    # 서비스 카테고리 LLM 검토
+    print("서비스 카테고리 검토 중...")
+    reviewer = ServiceCategoryReviewer()
+    if classified_letters:
+        classified_letters, letter_changes = reviewer.review_batch(classified_letters, "message")
+        if letter_changes:
+            print(f"  - 편지글 {len(letter_changes)}건 재분류")
+    if classified_posts:
+        classified_posts, post_changes = reviewer.review_batch(classified_posts, "textBody")
+        if post_changes:
+            print(f"  - 게시글 {len(post_changes)}건 재분류")
+
     print("저장 중...")
     data_store.save_weekly_data(start_date, end_date, classified_letters, classified_posts)
     print(f"✓ 저장 완료: {start_date}.json")
@@ -94,13 +106,13 @@ def generate_week_data(start_date, end_date, data_store, master_info=None):
 
 
 def main():
-    # 대상 주간 (12월 29일 ~ 1월 4일)
-    target_start = "2025-12-29"
-    target_end = "2026-01-05"  # 1-4 다음날까지 (exclusive)
+    # 대상 주간 (1월 5일 ~ 1월 11일)
+    target_start = "2026-01-05"
+    target_end = "2026-01-12"  # 1-11 다음날까지 (exclusive)
 
-    # 전주 (12월 22일 ~ 12월 28일)
-    prev_start = "2025-12-22"
-    prev_end = "2025-12-29"
+    # 전주 (12월 29일 ~ 1월 4일)
+    prev_start = "2025-12-29"
+    prev_end = "2026-01-05"
 
     print("="*60)
     print("📊 특정 주간 리포트 생성")
@@ -236,7 +248,7 @@ def main():
                         file_path=excel_path,
                         thread_ts=message_ts,
                         title=f"원본 데이터 ({target_start})",
-                        comment="📎 라벨링된 원본 데이터 파일입니다."
+                        comment=""
                     )
                     if file_result.get("ok"):
                         print(f"✓ 엑셀 파일 업로드 완료")

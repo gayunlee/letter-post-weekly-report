@@ -18,6 +18,23 @@ class WeeklyDataQuery:
         self.project_id = client.project_id
         self.dataset_id = "us_plus"
 
+    @staticmethod
+    def _kst_to_utc(date_str: str) -> str:
+        """
+        KST 날짜(YYYY-MM-DD)를 UTC 타임스탬프로 변환
+        KST 자정 = UTC 전날 15:00
+
+        Args:
+            date_str: KST 날짜 (YYYY-MM-DD)
+
+        Returns:
+            UTC 타임스탬프 (YYYY-MM-DDTHH:MM:SS.000Z)
+        """
+        date = datetime.strptime(date_str, '%Y-%m-%d')
+        # KST 자정 = UTC -9시간 = 전날 15:00
+        utc_time = date - timedelta(hours=9)
+        return utc_time.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+
     def get_weekly_letters(
         self,
         start_date: str,
@@ -27,12 +44,15 @@ class WeeklyDataQuery:
         주간 편지글 조회
 
         Args:
-            start_date: 시작 날짜 (YYYY-MM-DD)
-            end_date: 종료 날짜 (YYYY-MM-DD)
+            start_date: 시작 날짜 (YYYY-MM-DD, KST 기준)
+            end_date: 종료 날짜 (YYYY-MM-DD, KST 기준, exclusive)
 
         Returns:
             편지글 데이터 리스트
         """
+        start_utc = self._kst_to_utc(start_date)
+        end_utc = self._kst_to_utc(end_date)
+
         query = f"""
         SELECT
             _id,
@@ -45,9 +65,8 @@ class WeeklyDataQuery:
             viewType
         FROM `{self.project_id}.{self.dataset_id}.usermastermessages`
         WHERE
-            createdAt >= '{start_date}'
-            AND createdAt < '{end_date}'
-            AND isBlock = 'false'
+            createdAt >= '{start_utc}'
+            AND createdAt < '{end_utc}'
             AND type = 'LETTER'
         ORDER BY createdAt DESC
         """
@@ -63,12 +82,15 @@ class WeeklyDataQuery:
         주간 게시글 조회
 
         Args:
-            start_date: 시작 날짜 (YYYY-MM-DD)
-            end_date: 종료 날짜 (YYYY-MM-DD)
+            start_date: 시작 날짜 (YYYY-MM-DD, KST 기준)
+            end_date: 종료 날짜 (YYYY-MM-DD, KST 기준, exclusive)
 
         Returns:
             게시글 데이터 리스트
         """
+        start_utc = self._kst_to_utc(start_date)
+        end_utc = self._kst_to_utc(end_date)
+
         query = f"""
         SELECT
             _id,
@@ -84,9 +106,8 @@ class WeeklyDataQuery:
             deleted
         FROM `{self.project_id}.{self.dataset_id}.posts`
         WHERE
-            createdAt >= '{start_date}'
-            AND createdAt < '{end_date}'
-            AND isBlock = 'false'
+            createdAt >= '{start_utc}'
+            AND createdAt < '{end_utc}'
             AND deleted = 'false'
         ORDER BY createdAt DESC
         """

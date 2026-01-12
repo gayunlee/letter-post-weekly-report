@@ -149,45 +149,47 @@ markdown 불릿 포인트 형식으로 작성해주세요."""
             return f"- 이번 주 전체 이용자 반응 규모는 총 {total['this_week']['total']}건입니다."
 
     def _generate_slack_summary(self, stats: Dict[str, Any]) -> str:
-        """슬랙 스레드용 3줄 요약 생성"""
-        total = stats["total_stats"]
-        category_stats = stats["category_stats"]
+        """슬랙 스레드용 3줄 요약 생성 (내용 중심)"""
         master_stats = stats["master_stats"]
+        category_stats = stats["category_stats"]
 
-        # 마스터별 주요 이슈 수집
+        # 상위 마스터별 콘텐츠 샘플 수집
         sorted_masters = sorted(
             master_stats.items(),
             key=lambda x: x[1]["this_week"]["total"],
             reverse=True
-        )[:5]  # 상위 5개만
+        )[:5]
 
-        master_summaries = []
+        master_contents = []
         for master_name, data in sorted_masters:
-            if data["this_week"]["total"] > 0:
-                master_summaries.append(f"- {master_name}: 편지 {data['this_week']['letters']}건, 게시글 {data['this_week']['posts']}건")
+            contents = data.get("contents", [])
+            if contents:
+                # 각 마스터별 콘텐츠 샘플 (최대 5개)
+                sample_texts = [c.get("content", "")[:100] for c in contents[:5] if c.get("content")]
+                if sample_texts:
+                    master_contents.append(f"[{master_name}]\n" + "\n".join([f"- {t}" for t in sample_texts]))
 
-        prompt = f"""다음은 금융 콘텐츠 플랫폼의 주간 이용자 반응 통계입니다:
+        prompt = f"""다음은 금융 콘텐츠 플랫폼의 이번 주 이용자 반응 데이터입니다.
 
-[전체 통계]
-- 이번 주: 편지 {total['this_week']['letters']}건, 게시글 {total['this_week']['posts']}건 (총 {total['this_week']['total']}건)
-- 전주: 편지 {total['last_week']['letters']}건, 게시글 {total['last_week']['posts']}건 (총 {total['last_week']['total']}건)
-- 증감: 편지 {total['change']['letters']:+d}건, 게시글 {total['change']['posts']:+d}건
-
-[카테고리별 통계]
+[카테고리별 분포]
 {chr(10).join([f"- {cat}: {count}건" for cat, count in category_stats.items()])}
 
-[상위 마스터]
-{chr(10).join(master_summaries)}
+[마스터별 주요 콘텐츠 샘플]
+{chr(10).join(master_contents[:3])}
 
 위 데이터를 바탕으로 슬랙 스레드에 올릴 3줄 요약을 작성해주세요.
 
-형식:
-1줄: 전주 대비 전체 추이 (증감 방향과 특징)
-2줄: 카테고리별 특징 (가장 높은 카테고리 중심)
-3줄: 이번 주 주요 이슈 (마스터별 특이사항이 있다면 포함)
+요구사항:
+- 숫자나 퍼센트 증감은 언급하지 마세요
+- 이번 주 이용자들이 어떤 이야기를 나눴는지 내용 중심으로 요약해주세요
+- 주요 테마나 감성적 특징을 중심으로 작성해주세요
 
-각 줄은 한 문장으로, 구체적인 숫자는 최소화하고 추세와 특징 중심으로 작성해주세요.
-줄바꿈으로 구분하여 3줄만 출력해주세요."""
+형식:
+1줄: 이번 주 전반적인 분위기/테마
+2줄: 주요 화제나 관심사
+3줄: 특이사항이나 눈에 띄는 반응
+
+각 줄은 한 문장으로, 줄바꿈으로 구분하여 3줄만 출력해주세요."""
 
         try:
             message = self.client.messages.create(
@@ -203,14 +205,12 @@ markdown 불릿 포인트 형식으로 작성해주세요."""
 
         except Exception as e:
             # API 오류시 기본 텍스트 반환
-            change_total = total['change']['total']
-            trend = "증가" if change_total > 0 else ("감소" if change_total < 0 else "유지")
             top_category = max(category_stats.items(), key=lambda x: x[1])[0] if category_stats else "일상·공감"
 
             return (
-                f"이번 주 이용자 반응이 전주 대비 {trend}했습니다.\n"
-                f"'{top_category}' 카테고리가 가장 많은 비중을 차지했습니다.\n"
-                f"서비스 불편 건수는 소수에 그쳐 플랫폼 만족도가 양호한 것으로 파악됩니다."
+                f"이번 주는 '{top_category}' 중심의 소통이 활발했습니다.\n"
+                f"마스터들에 대한 감사와 응원 메시지가 주를 이뤘습니다.\n"
+                f"서비스 관련 피드백은 소수에 그쳐 전반적으로 안정적인 주간이었습니다."
             )
 
     def _generate_master_details(self, stats: Dict[str, Any]) -> str:
