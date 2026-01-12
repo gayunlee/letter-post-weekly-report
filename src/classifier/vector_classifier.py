@@ -1,7 +1,12 @@
 """벡터 유사도 기반 콘텐츠 분류 시스템 (하이브리드)"""
-from typing import List, Dict, Any
+import os
+from typing import List, Dict, Any, Tuple
+from anthropic import Anthropic
+from dotenv import load_dotenv
 from ..vectorstore.chroma_store import ChromaVectorStore
 from .content_classifier import ContentClassifier
+
+load_dotenv()
 
 
 class VectorContentClassifier:
@@ -533,3 +538,158 @@ class VectorContentClassifier:
             print(f"  → LLM fallback 사용: {self.llm_fallback_count}건")
 
         return results
+
+
+class ServiceCategoryReviewer:
+    """서비스 카테고리(서비스 문의, 서비스 불편) LLM 후처리 검토기"""
+
+    # 전체 카테고리 정의
+    CATEGORIES = {
+        "감사·후기": "마스터에 대한 감사, 긍정적 피드백, 투자 성과 후기",
+        "질문·토론": "포트폴리오, 종목, 투자 전략, 비중, 시장 전망에 대한 질문 및 토론",
+        "정보성 글": "투자 경험 공유, 종목 분석, 뉴스/정보 공유, 수익률 공유",
+        "서비스 문의": "플랫폼/서비스 기능 문의, 멤버십/결제/배송/일정 관련 문의",
+        "서비스 불편": "플랫폼 버그, 서비스 운영 불만, 답변 지연 불만",
+        "일상·공감": "새해인사, 안부, 축하, 가입인사, 일상 이야기, 공감 표현, 학우들에게 전하는 말"
+    }
+
+    def __init__(self):
+        """ServiceCategoryReviewer 초기화"""
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY가 설정되지 않았습니다.")
+        self.client = Anthropic(api_key=api_key)
+
+    def review_single(self, content: str, current_category: str) -> Dict[str, Any]:
+        """
+        단일 콘텐츠의 서비스 카테고리 분류가 맞는지 LLM으로 검토
+
+        Args:
+            content: 콘텐츠 텍스트
+            current_category: 현재 분류된 카테고리 (서비스 문의 또는 서비스 불편)
+
+        Returns:
+            {"correct": bool, "suggested_category": str, "reason": str}
+        """
+        category_desc = "\n".join([
+            f"- {cat}: {desc}"
+            for cat, desc in self.CATEGORIES.items()
+        ])
+
+        prompt = f"""다음은 금융 콘텐츠 크리에이터 플랫폼의 사용자가 작성한 글입니다.
+현재 이 글은 "{current_category}"로 분류되어 있습니다.
+
+[분류 카테고리]
+{category_desc}
+
+[분류 기준]
+- "서비스 문의": 플랫폼 운영에 관한 실제 문의 (멤버십, 결제, 배송, 오프라인 일정, 기능 사용법 등)
+- "서비스 불편": 플랫폼/서비스에 대한 실제 불만 (앱 버그, 콘텐츠 부족, 답변 지연 등)
+- 투자/종목/시장에 관한 질문은 "질문·토론"
+- 학우들에게 정보를 알려주거나 안부/공감을 나누는 글은 "일상·공감"
+- 뉴스나 정보를 공유하는 글은 "정보성 글"
+
+[분류할 내용]
+{content[:500]}
+
+위 글이 "{current_category}"로 분류된 것이 맞는지 검토해주세요.
+다음 형식으로 답변해주세요:
+
+정확함: [예/아니오]
+올바른 카테고리: [카테고리명]
+이유: [1문장으로 설명]"""
+
+        try:
+            message = self.client.messages.create(
+                model="claude-sonnet-4-5-20250929",
+                max_tokens=200,
+                temperature=0,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
+
+            response_text = message.content[0].text.strip()
+            lines = response_text.split('\n')
+
+            correct = True
+            suggested_category = current_category
+            reason = ""
+
+            for line in lines:
+                if line.startswith('정확함:'):
+                    value = line.replace('정확함:', '').strip()
+                    correct = value == "예"
+                elif line.startswith('올바른 카테고리:'):
+                    suggested_category = line.replace('올바른 카테고리:', '').strip()
+                elif line.startswith('이유:'):
+                    reason = line.replace('이유:', '').strip()
+
+            return {
+                "correct": correct,
+                "suggested_category": suggested_category,
+                "reason": reason
+            }
+
+        except Exception as e:
+            return {
+                "correct": True,  # 오류 시 기존 분류 유지
+                "suggested_category": current_category,
+                "reason": f"검토 오류: {str(e)}"
+            }
+
+    def review_batch(
+        self,
+        items: List[Dict[str, Any]],
+        content_field: str = "message"
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        서비스 문의/불편으로 분류된 항목들을 LLM으로 검토하고 필요시 재분류
+
+        Args:
+            items: 분류된 콘텐츠 리스트 (classification 필드 포함)
+            content_field: 콘텐츠 텍스트 필드명
+
+        Returns:
+            (수정된 전체 리스트, 변경된 항목 리스트)
+        """
+        service_categories = ["서비스 문의", "서비스 불편"]
+        changes = []
+        reviewed_count = 0
+
+        for item in items:
+            classification = item.get("classification", {})
+            current_category = classification.get("category", "")
+
+            if current_category not in service_categories:
+                continue
+
+            content = item.get(content_field, "") or ""
+            if not content:
+                continue
+
+            reviewed_count += 1
+            review_result = self.review_single(content, current_category)
+
+            if not review_result["correct"]:
+                # 카테고리 변경
+                old_category = current_category
+                new_category = review_result["suggested_category"]
+
+                item["classification"]["category"] = new_category
+                item["classification"]["review_changed"] = True
+                item["classification"]["original_category"] = old_category
+                item["classification"]["review_reason"] = review_result["reason"]
+
+                changes.append({
+                    "content": content[:100],
+                    "from": old_category,
+                    "to": new_category,
+                    "reason": review_result["reason"]
+                })
+
+            # 진행 상황 출력 (10건마다)
+            if reviewed_count % 10 == 0:
+                print(f"  검토 진행: {reviewed_count}건 완료 (변경: {len(changes)}건)")
+
+        return items, changes
