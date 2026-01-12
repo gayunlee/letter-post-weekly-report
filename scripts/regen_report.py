@@ -24,9 +24,10 @@ print(f"✓ 통계 분석 완료 (마스터 {len(stats['master_stats'])}개)", f
 
 print("리포트 생성 중...", flush=True)
 generator = ReportGenerator()
-report = generator.generate_report(
+report, slack_summary = generator.generate_report(
     stats, '2025-12-29', '2026-01-04',
     output_path='./reports/weekly_report_2025-12-29.md'
 )
 print("✓ 리포트 생성 완료", flush=True)
 print("저장 위치: ./reports/weekly_report_2025-12-29.md")
+print(f"✓ 슬랙 요약:\n{slack_summary}")

@@ -168,7 +168,7 @@ def main():
     output_path = os.path.join(output_dir, output_filename)
 
     generator = ReportGenerator()
-    report = generator.generate_report(
+    report, slack_summary = generator.generate_report(
         stats,
         target_start,
         target_end,
@@ -177,6 +177,7 @@ def main():
 
     print(f"✓ 리포트 생성 완료")
     print(f"✓ 저장 위치: {output_path}")
+    print(f"✓ 슬랙 요약:\n{slack_summary}")
 
     # 6. 엑셀 파일 생성
     print(f"\n[6단계] 엑셀 파일 생성")
@@ -221,7 +222,8 @@ def main():
                 week_label=week_label,
                 start_date=target_start,
                 end_date=target_end,
-                notion_url=notion_url
+                notion_url=notion_url,
+                summary=slack_summary
             )
 
             if result.get("ok"):

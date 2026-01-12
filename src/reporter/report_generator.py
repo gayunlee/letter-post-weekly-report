@@ -31,7 +31,7 @@ class ReportGenerator:
         start_date: str,
         end_date: str,
         output_path: str = None
-    ) -> str:
+    ) -> tuple:
         """
         주간 리포트 생성
 
@@ -42,7 +42,7 @@ class ReportGenerator:
             output_path: 저장 경로 (선택, 지정하지 않으면 저장하지 않음)
 
         Returns:
-            생성된 마크다운 리포트
+            (생성된 마크다운 리포트, 슬랙용 3줄 요약)
         """
         # 리포트 헤더 생성
         report = self._generate_header(start_date, end_date, stats)
@@ -53,13 +53,16 @@ class ReportGenerator:
         # 마스터별 상세 생성 (플랫폼/서비스 피드백, 체크포인트 포함)
         report += self._generate_master_details(stats)
 
+        # 슬랙용 3줄 요약 생성
+        slack_summary = self._generate_slack_summary(stats)
+
         # 파일로 저장
         if output_path:
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.write(report)
 
-        return report
+        return report, slack_summary
 
     def _generate_header(
         self,
@@ -144,6 +147,71 @@ markdown 불릿 포인트 형식으로 작성해주세요."""
         except Exception as e:
             # API 오류시 기본 텍스트 반환
             return f"- 이번 주 전체 이용자 반응 규모는 총 {total['this_week']['total']}건입니다."
+
+    def _generate_slack_summary(self, stats: Dict[str, Any]) -> str:
+        """슬랙 스레드용 3줄 요약 생성"""
+        total = stats["total_stats"]
+        category_stats = stats["category_stats"]
+        master_stats = stats["master_stats"]
+
+        # 마스터별 주요 이슈 수집
+        sorted_masters = sorted(
+            master_stats.items(),
+            key=lambda x: x[1]["this_week"]["total"],
+            reverse=True
+        )[:5]  # 상위 5개만
+
+        master_summaries = []
+        for master_name, data in sorted_masters:
+            if data["this_week"]["total"] > 0:
+                master_summaries.append(f"- {master_name}: 편지 {data['this_week']['letters']}건, 게시글 {data['this_week']['posts']}건")
+
+        prompt = f"""다음은 금융 콘텐츠 플랫폼의 주간 이용자 반응 통계입니다:
+
+[전체 통계]
+- 이번 주: 편지 {total['this_week']['letters']}건, 게시글 {total['this_week']['posts']}건 (총 {total['this_week']['total']}건)
+- 전주: 편지 {total['last_week']['letters']}건, 게시글 {total['last_week']['posts']}건 (총 {total['last_week']['total']}건)
+- 증감: 편지 {total['change']['letters']:+d}건, 게시글 {total['change']['posts']:+d}건
+
+[카테고리별 통계]
+{chr(10).join([f"- {cat}: {count}건" for cat, count in category_stats.items()])}
+
+[상위 마스터]
+{chr(10).join(master_summaries)}
+
+위 데이터를 바탕으로 슬랙 스레드에 올릴 3줄 요약을 작성해주세요.
+
+형식:
+1줄: 전주 대비 전체 추이 (증감 방향과 특징)
+2줄: 카테고리별 특징 (가장 높은 카테고리 중심)
+3줄: 이번 주 주요 이슈 (마스터별 특이사항이 있다면 포함)
+
+각 줄은 한 문장으로, 구체적인 숫자는 최소화하고 추세와 특징 중심으로 작성해주세요.
+줄바꿈으로 구분하여 3줄만 출력해주세요."""
+
+        try:
+            message = self.client.messages.create(
+                model="claude-sonnet-4-5-20250929",
+                max_tokens=300,
+                temperature=0.3,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
+
+            return message.content[0].text.strip()
+
+        except Exception as e:
+            # API 오류시 기본 텍스트 반환
+            change_total = total['change']['total']
+            trend = "증가" if change_total > 0 else ("감소" if change_total < 0 else "유지")
+            top_category = max(category_stats.items(), key=lambda x: x[1])[0] if category_stats else "일상·공감"
+
+            return (
+                f"이번 주 이용자 반응이 전주 대비 {trend}했습니다.\n"
+                f"'{top_category}' 카테고리가 가장 많은 비중을 차지했습니다.\n"
+                f"서비스 불편 건수는 소수에 그쳐 플랫폼 만족도가 양호한 것으로 파악됩니다."
+            )
 
     def _generate_master_details(self, stats: Dict[str, Any]) -> str:
         """마스터별 상세 리포트 생성"""

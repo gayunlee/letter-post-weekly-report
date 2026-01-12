@@ -300,7 +300,7 @@ def main():
     generator = ReportGenerator()
 
     print("리포트 생성 중...")
-    report = generator.generate_report(
+    report, slack_summary = generator.generate_report(
         stats,
         start_date,
         end_date,
@@ -309,6 +309,7 @@ def main():
 
     print(f"✓ 리포트 생성 완료")
     print(f"✓ 저장 위치: {output_path}")
+    print(f"✓ 슬랙 요약:\n{slack_summary}")
     print()
 
     # 6. 완료
