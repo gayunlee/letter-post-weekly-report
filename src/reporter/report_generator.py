@@ -1,7 +1,8 @@
 """주간 리포트 생성 모듈"""
 import os
-from typing import Dict, Any
+from typing import Dict, Any, List, Tuple
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from anthropic import Anthropic
 from dotenv import load_dotenv
 from src.utils.text_utils import clean_text
@@ -163,7 +164,7 @@ markdown 불릿 포인트 형식으로 작성해주세요."""
             return f"- 이번 주 전체 이용자 반응 규모는 총 {total['this_week']['total']}건입니다."
 
     def _generate_master_details(self, stats: Dict[str, Any]) -> str:
-        """마스터별 상세 리포트 생성"""
+        """마스터별 상세 리포트 생성 (Claude API 병렬 호출)"""
         master_stats = stats["master_stats"]
 
         # 총 건수로 정렬
@@ -173,30 +174,49 @@ markdown 불릿 포인트 형식으로 작성해주세요."""
             reverse=True
         )
 
+        # 활성 마스터만 필터링
+        active_masters = [
+            (name, data) for name, data in sorted_masters
+            if data["this_week"]["total"] > 0
+        ]
+
+        # Claude API 병렬 호출로 인사이트 생성
+        insights = {}
+        max_workers = min(5, len(active_masters))  # 최대 5개 동시 호출
+        print(f"  마스터 인사이트 생성 중... ({len(active_masters)}명, 병렬 {max_workers}개)")
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_master = {
+                executor.submit(self._generate_master_insight, name, data): name
+                for name, data in active_masters
+            }
+            for future in as_completed(future_to_master):
+                master_name = future_to_master[future]
+                try:
+                    insights[master_name] = future.result()
+                except Exception as e:
+                    print(f"  ⚠️ {master_name} 인사이트 생성 실패: {e}")
+                    insights[master_name] = self._generate_fallback_insight(
+                        dict(active_masters).get(master_name, {})
+                    )
+
+        # 정렬 순서대로 리포트 조합
         details = "# 1. 오피셜클럽별 상세\n\n"
 
-        for i, (master_group_name, data) in enumerate(sorted_masters, 1):
-            if data["this_week"]["total"] == 0:
-                continue
-
+        for i, (master_group_name, data) in enumerate(active_masters, 1):
             this_week = data["this_week"]
             last_week = data["last_week"]
             change_data = data["change"]
 
-            # 마스터 그룹명 사용 (숫자 제거된 이름)
             master_name = master_group_name
-
-            # 클럽명은 data["club_names"]에서 가져옴 (analytics에서 수집)
             club_names = data.get("club_names", set())
 
-            # 클럽명이 여러 개면 합산 표시
             if len(club_names) > 1:
                 clubs_suffix = f" _({'+'.join(sorted(club_names))} 합산)_"
             else:
                 clubs_suffix = ""
 
-            # Claude로 상세 인사이트 생성
-            insight = self._generate_master_insight(master_name, data)
+            insight = insights.get(master_name, self._generate_fallback_insight(data))
 
             details += f"""## {i}. {master_name}{clubs_suffix}
 
