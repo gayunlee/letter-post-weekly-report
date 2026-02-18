@@ -28,18 +28,8 @@ def preprocess_text(text: str) -> str:
 
     return text.strip()
 
-# 라벨링 데이터의 신규 카테고리 → 기존 카테고리 매핑
-NEW_TO_OLD_CATEGORY = {
-    "긍정 피드백": "감사·후기",
-    "부정 피드백": "불편사항",
-    "질문/문의": "질문·토론",
-    "정보 공유": "정보성 글",
-    "일상 소통": "일상·공감",
-}
-
-OLD_TO_NEW_CATEGORY = {v: k for k, v in NEW_TO_OLD_CATEGORY.items()}
-# 서비스 피드백은 불편사항과 같은 "부정 피드백"으로 매핑
-OLD_TO_NEW_CATEGORY["서비스 피드백"] = "부정 피드백"
+# 7개 표준 카테고리
+VALID_CATEGORIES = {"감사·후기", "질문·토론", "정보성 글", "일상·공감", "서비스 피드백", "서비스 불편사항", "서비스 제보/건의"}
 
 
 class VectorContentClassifier:
@@ -101,17 +91,17 @@ class VectorContentClassifier:
         {"content": "홍매화반 교재 언제 보내주세요?", "category": "서비스 피드백"},
         {"content": "상품 변경 칸이 없어서요~ 변경이 가능할까요?", "category": "서비스 피드백"},
 
-        # ========== 불편사항 (10개) ==========
-        {"content": "앱이 자꾸 튕겨요. 너무 답답합니다.", "category": "불편사항"},
-        {"content": "결제를 했는데 강의가 안 열려요. 정말 불편합니다.", "category": "불편사항"},
-        {"content": "매번 같은 질문인데 왜 답변을 안 해주시는 건가요? 소통이 안 되는 느낌입니다.", "category": "불편사항"},
-        {"content": "구독료 대비 콘텐츠가 너무 적은 것 같아요.", "category": "불편사항"},
-        {"content": "여전히 소외감이 느껴집니다. 시장은 좋은데 우리종목 대부분 마이너스입니다.", "category": "불편사항"},
-        {"content": "종목이 너무많습니다. 원금 1억이 가치없는 휴지가 된것같습니다.", "category": "불편사항"},
-        {"content": "비중 평단을 제시하지 않아서 정말 답답합니다.", "category": "불편사항"},
-        {"content": "좋은기업만 알려주시지 비중을 안알려주셔서 40만원에 산분도 90만원에 산분도 있어요.", "category": "불편사항"},
-        {"content": "일주일에 한번도 안 올라오는 컨텐츠에 무엇을 기대할까요...", "category": "불편사항"},
-        {"content": "문의를 드렸는데 답이 없네요. 실망입니다.", "category": "불편사항"},
+        # ========== 서비스 불편사항 (10개) ==========
+        {"content": "앱이 자꾸 튕겨요. 너무 답답합니다.", "category": "서비스 불편사항"},
+        {"content": "결제를 했는데 강의가 안 열려요. 정말 불편합니다.", "category": "서비스 불편사항"},
+        {"content": "매번 같은 질문인데 왜 답변을 안 해주시는 건가요? 소통이 안 되는 느낌입니다.", "category": "서비스 불편사항"},
+        {"content": "구독료 대비 콘텐츠가 너무 적은 것 같아요.", "category": "서비스 불편사항"},
+        {"content": "여전히 소외감이 느껴집니다. 시장은 좋은데 우리종목 대부분 마이너스입니다.", "category": "서비스 불편사항"},
+        {"content": "종목이 너무많습니다. 원금 1억이 가치없는 휴지가 된것같습니다.", "category": "서비스 불편사항"},
+        {"content": "비중 평단을 제시하지 않아서 정말 답답합니다.", "category": "서비스 불편사항"},
+        {"content": "좋은기업만 알려주시지 비중을 안알려주셔서 40만원에 산분도 90만원에 산분도 있어요.", "category": "서비스 불편사항"},
+        {"content": "일주일에 한번도 안 올라오는 컨텐츠에 무엇을 기대할까요...", "category": "서비스 불편사항"},
+        {"content": "문의를 드렸는데 답이 없네요. 실망입니다.", "category": "서비스 불편사항"},
 
         # ========== 일상·공감 (10개) ==========
         {"content": "새해 복 많이 받으세요!", "category": "일상·공감"},
@@ -169,30 +159,25 @@ class VectorContentClassifier:
             self._initialize_training_data()
 
     def _initialize_training_data(self):
-        """학습 예제를 벡터 스토어에 저장 (라벨링 데이터 우선, 없으면 기본 예제)"""
+        """학습 예제를 벡터 스토어에 저장 (통합 라벨링 데이터 우선, 없으면 기본 예제)"""
         count = 0
 
-        # 1) 라벨링 데이터 로드 시도
-        labeling_file = Path(__file__).parent.parent.parent / "data" / "labeling" / "refined_labeled.json"
-        if labeling_file.exists():
-            with open(labeling_file, encoding="utf-8") as f:
+        # 1) 통합 라벨링 데이터 로드 시도 (xlsx 4개 파일 통합본)
+        combined_file = Path(__file__).parent.parent.parent / "data" / "training_data" / "labeled_combined.json"
+        if combined_file.exists():
+            with open(combined_file, encoding="utf-8") as f:
                 labeled_data = json.load(f)
 
             for item in labeled_data:
                 text = item.get("text", "").strip()
-                new_label = item.get("new_label", "")
-                if not text or not new_label:
-                    continue
-
-                # 신규 카테고리 → 기존 카테고리 매핑
-                old_category = NEW_TO_OLD_CATEGORY.get(new_label)
-                if not old_category:
+                category = item.get("category", "")
+                if not text or category not in VALID_CATEGORIES:
                     continue
 
                 self.store.add_content(
-                    content_id=f"labeled_{item.get('id', count)}",
+                    content_id=f"labeled_{count}",
                     text=preprocess_text(text)[:500],
-                    metadata={"category": old_category},
+                    metadata={"category": category},
                 )
                 count += 1
 
