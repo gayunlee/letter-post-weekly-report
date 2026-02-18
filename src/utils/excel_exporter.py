@@ -29,7 +29,8 @@ def export_to_excel(
             "클럽": letter.get("masterClubName", ""),
             "내용": letter.get("message", ""),
             "라벨": letter.get("classification", {}).get("category", "미분류"),
-            "날짜": _format_date(letter.get("createdAt", ""))
+            "날짜": _format_date(letter.get("createdAt", "")),
+            "차단": "Y" if letter.get("isBlock") == "true" else "N"
         })
 
     # 게시글 데이터 변환
@@ -42,7 +43,8 @@ def export_to_excel(
             "제목": post.get("title", ""),
             "내용": content,
             "라벨": post.get("classification", {}).get("category", "미분류"),
-            "날짜": _format_date(post.get("createdAt", ""))
+            "날짜": _format_date(post.get("createdAt", "")),
+            "차단": "Y" if post.get("isBlock") == "true" else "N"
         })
 
     # DataFrame 생성
@@ -73,7 +75,8 @@ def _set_column_widths(worksheet, df: pd.DataFrame):
         '제목': 40,
         '내용': 80,  # 내용 열은 넓게
         '라벨': 15,
-        '날짜': 18
+        '날짜': 18,
+        '차단': 8
     }
 
     for i, col in enumerate(df.columns):

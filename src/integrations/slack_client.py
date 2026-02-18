@@ -38,7 +38,8 @@ class SlackNotifier:
         week_label: str,
         start_date: str,
         end_date: str,
-        notion_url: str
+        notion_url: str,
+        summary: str = None
     ) -> Dict[str, Any]:
         """
         리포트 알림 전송 (메인 메시지 + 댓글)
@@ -48,6 +49,7 @@ class SlackNotifier:
             start_date: 시작 날짜 (YYYY-MM-DD)
             end_date: 종료 날짜 (YYYY-MM-DD)
             notion_url: 노션 페이지 URL
+            summary: 슬랙 스레드용 3줄 요약 (선택)
 
         Returns:
             {"ok": bool, "message_ts": str, "thread_ts": str}
@@ -65,13 +67,20 @@ class SlackNotifier:
         # 메인 메시지
         main_message = f"[{week_label}]오피셜클럽 별 편지·게시글 통합 분석 공유"
 
-        # 댓글 내용
-        thread_message = (
-            f"오피셜클럽 별 편지·게시글 통합 분석 ({start_formatted} ~ {actual_end.split('.')[-1]})을 "
-            f"작성하여 공유드립니다.\n"
-            f":pushpin: 이번 주 이용자 반응 리포트 (편지 + 게시글 기준, {start_formatted} ~ {actual_end.split('.')[-1]})\n"
-            f"{notion_url}"
-        )
+        # 댓글 내용 (3줄 요약 형식)
+        if summary:
+            thread_message = (
+                f"{summary}\n\n"
+                f":pushpin: 리포트 전문: {notion_url}"
+            )
+        else:
+            # 요약이 없으면 기존 형식 사용
+            thread_message = (
+                f"오피셜클럽 별 편지·게시글 통합 분석 ({start_formatted} ~ {actual_end.split('.')[-1]})을 "
+                f"작성하여 공유드립니다.\n"
+                f":pushpin: 이번 주 이용자 반응 리포트 (편지 + 게시글 기준, {start_formatted} ~ {actual_end.split('.')[-1]})\n"
+                f"{notion_url}"
+            )
 
         # 1. 메인 메시지 전송
         main_response = self._send_message(main_message)

@@ -1,17 +1,20 @@
-"""주간 리포트 생성 메인 스크립트"""
+"""라벨링 테스트 스크립트 - 기존 로직 그대로 수행하되, 노션/리포트 발송만 제외하고 엑셀 파일을 Slack으로 전송"""
 import sys
 import os
 from datetime import datetime
 from typing import List, Dict, Any
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill
 from src.bigquery.client import BigQueryClient
 from src.bigquery.queries import WeeklyDataQuery
-from src.classifier.vector_classifier import VectorContentClassifier
+from src.classifier.vector_classifier import VectorContentClassifier, ServiceCategoryReviewer
 from src.vectorstore.chroma_store import ChromaVectorStore
 from src.reporter.analytics import WeeklyAnalytics
 from src.reporter.report_generator import ReportGenerator
 from src.storage.data_store import ClassifiedDataStore
+from src.integrations.slack_client import SlackNotifier
 
 
 # 서비스 공지글 필터링 키워드
@@ -24,16 +27,7 @@ FILTER_KEYWORDS = [
 
 
 def filter_service_notices(items: List[Dict[str, Any]], content_field: str = "message") -> List[Dict[str, Any]]:
-    """
-    서비스 공지글 필터링
-
-    Args:
-        items: 필터링할 아이템 리스트
-        content_field: 콘텐츠 필드명
-
-    Returns:
-        필터링된 아이템 리스트
-    """
+    """서비스 공지글 필터링"""
     filtered = []
     removed_count = 0
 
@@ -52,12 +46,99 @@ def filter_service_notices(items: List[Dict[str, Any]], content_field: str = "me
     return filtered
 
 
-def main():
-    """주간 리포트 생성 메인 프로세스"""
+def create_labeled_excel(letters: List[Dict], posts: List[Dict], output_path: str) -> str:
+    """분류된 데이터를 엑셀 파일로 생성"""
+    wb = Workbook()
 
+    # 스타일 정의
+    header_font = Font(bold=True)
+    header_fill = PatternFill(start_color="DDEEFF", end_color="DDEEFF", fill_type="solid")
+    wrap_alignment = Alignment(wrap_text=True, vertical='top')
+
+    # === 편지 시트 ===
+    ws_letters = wb.active
+    ws_letters.title = "편지"
+
+    letter_headers = ["마스터", "오피셜클럽", "내용", "카테고리", "생성일"]
+    for col, header in enumerate(letter_headers, 1):
+        cell = ws_letters.cell(row=1, column=col, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+
+    for row_idx, item in enumerate(letters, 2):
+        classification = item.get('classification', {})
+        for col in range(1, 6):
+            cell = ws_letters.cell(row=row_idx, column=col)
+            cell.alignment = wrap_alignment
+
+        ws_letters.cell(row=row_idx, column=1, value=item.get('masterName', ''))
+        ws_letters.cell(row=row_idx, column=2, value=item.get('masterClubName', ''))
+        ws_letters.cell(row=row_idx, column=3, value=(item.get('message', '') or '')[:1000])
+        ws_letters.cell(row=row_idx, column=4, value=classification.get('category', ''))
+        ws_letters.cell(row=row_idx, column=5, value=item.get('createdAt', '')[:10] if item.get('createdAt') else '')
+
+    ws_letters.column_dimensions['A'].width = 12
+    ws_letters.column_dimensions['B'].width = 15
+    ws_letters.column_dimensions['C'].width = 80
+    ws_letters.column_dimensions['D'].width = 15
+    ws_letters.column_dimensions['E'].width = 12
+
+    # === 게시글 시트 ===
+    ws_posts = wb.create_sheet(title="게시글")
+
+    post_headers = ["마스터", "오피셜클럽", "제목", "내용", "카테고리", "생성일"]
+    for col, header in enumerate(post_headers, 1):
+        cell = ws_posts.cell(row=1, column=col, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+
+    for row_idx, item in enumerate(posts, 2):
+        classification = item.get('classification', {})
+        content = item.get('textBody') or item.get('body', '') or ''
+        for col in range(1, 7):
+            cell = ws_posts.cell(row=row_idx, column=col)
+            cell.alignment = wrap_alignment
+
+        ws_posts.cell(row=row_idx, column=1, value=item.get('masterName', ''))
+        ws_posts.cell(row=row_idx, column=2, value=item.get('masterClubName', ''))
+        ws_posts.cell(row=row_idx, column=3, value=(item.get('title', '') or '')[:200])
+        ws_posts.cell(row=row_idx, column=4, value=content[:1000])
+        ws_posts.cell(row=row_idx, column=5, value=classification.get('category', ''))
+        ws_posts.cell(row=row_idx, column=6, value=item.get('createdAt', '')[:10] if item.get('createdAt') else '')
+
+    ws_posts.column_dimensions['A'].width = 12
+    ws_posts.column_dimensions['B'].width = 15
+    ws_posts.column_dimensions['C'].width = 40
+    ws_posts.column_dimensions['D'].width = 80
+    ws_posts.column_dimensions['E'].width = 15
+    ws_posts.column_dimensions['F'].width = 12
+
+    wb.save(output_path)
+    print(f"✓ 엑셀 파일 생성: {output_path}")
+
+    return output_path
+
+
+def main():
+    """라벨링 테스트 메인"""
     print("=" * 60)
-    print("📊 주간 리포트 자동 생성 시스템 (증분 처리)")
+    print("📊 라벨링 테스트 - 분류 후 엑셀 파일 Slack 전송")
     print("=" * 60)
+    print()
+
+    # 날짜 입력
+    start_date = input("시작일 (YYYY-MM-DD): ").strip()
+    end_date = input("종료일 (YYYY-MM-DD): ").strip()
+
+    try:
+        datetime.strptime(start_date, '%Y-%m-%d')
+        datetime.strptime(end_date, '%Y-%m-%d')
+    except ValueError:
+        print("날짜 형식이 잘못되었습니다.")
+        return
+
+    print()
+    print(f"📅 대상 기간: {start_date} ~ {end_date}")
     print()
 
     # 0. 데이터 저장소 초기화
@@ -65,11 +146,6 @@ def main():
         classified_data_dir=os.getenv("CLASSIFIED_DATA_DIR", "./data/classified_data"),
         stats_dir=os.getenv("STATS_DIR", "./data/stats")
     )
-
-    # 날짜 범위 계산
-    start_date, end_date = WeeklyDataQuery.get_last_week_range()
-    print(f"📅 대상 기간: {start_date} ~ {end_date}")
-    print()
 
     # 1. 저장된 분류 결과 확인
     print("1️⃣  분류 데이터 확인")
@@ -183,6 +259,34 @@ def main():
 
         print()
 
+        # 서비스 카테고리 LLM 후처리 검토
+        print("  🔍 서비스 카테고리 LLM 후처리 검토")
+        print("  " + "-" * 58)
+
+        reviewer = ServiceCategoryReviewer()
+
+        # 편지글 검토
+        service_letters = [l for l in classified_letters if l.get("classification", {}).get("category") in ["서비스 문의", "서비스 불편"]]
+        if service_letters:
+            print(f"  편지글 중 서비스 카테고리 {len(service_letters)}건 검토 중...")
+            classified_letters, letter_changes = reviewer.review_batch(classified_letters, content_field="message")
+            if letter_changes:
+                print(f"  ✓ 편지글 {len(letter_changes)}건 카테고리 변경됨")
+                for change in letter_changes:
+                    print(f"    - [{change['from']}] → [{change['to']}]: {change['content'][:50]}...")
+
+        # 게시글 검토
+        service_posts = [p for p in classified_posts if p.get("classification", {}).get("category") in ["서비스 문의", "서비스 불편"]]
+        if service_posts:
+            print(f"  게시글 중 서비스 카테고리 {len(service_posts)}건 검토 중...")
+            classified_posts, post_changes = reviewer.review_batch(classified_posts, content_field="textBody")
+            if post_changes:
+                print(f"  ✓ 게시글 {len(post_changes)}건 카테고리 변경됨")
+                for change in post_changes:
+                    print(f"    - [{change['from']}] → [{change['to']}]: {change['content'][:50]}...")
+
+        print()
+
         # 분류 결과 저장 (2-Tier)
         print("  💾 분류 결과 저장 (2-Tier)")
         print("  " + "-" * 58)
@@ -199,8 +303,8 @@ def main():
 
     print()
 
-    # 3. 벡터 스토어에 저장 (선택)
-    print("3️⃣  벡터 스토어 저장")
+    # 2. 벡터 스토어에 저장
+    print("2️⃣  벡터 스토어 저장")
     print("-" * 60)
 
     try:
@@ -229,12 +333,11 @@ def main():
         print(f"✓ {total_added}건 벡터 스토어에 저장 완료")
     except Exception as e:
         print(f"⚠️  벡터 스토어 저장 실패: {str(e)}")
-        print("   (리포트 생성은 계속 진행됩니다)")
 
     print()
 
-    # 2. 전주 데이터 로드 (전주 비교)
-    print("2️⃣  전주 데이터 로드")
+    # 3. 전주 데이터 로드 (전주 비교)
+    print("3️⃣  전주 데이터 로드")
     print("-" * 60)
 
     prev_start, prev_end = WeeklyDataQuery.get_previous_week_range()
@@ -251,9 +354,8 @@ def main():
             print(f"✓ 전주 데이터 로드: 편지 {len(previous_letters)}건, 게시글 {len(previous_posts)}건")
         except Exception as e:
             print(f"⚠️  전주 데이터 로드 실패: {str(e)}")
-            print("   (전주 비교 없이 진행됩니다)")
     else:
-        print(f"❌ 전주 데이터 없음 (첫 실행 또는 전주 데이터 미생성)")
+        print(f"❌ 전주 데이터 없음")
 
     print()
 
@@ -277,56 +379,54 @@ def main():
     for category, count in sorted(category_stats.items(), key=lambda x: x[1], reverse=True):
         print(f"  - {category}: {count}건")
 
-    master_stats = stats["master_stats"]
-    print(f"✓ 마스터별 통계: {len(master_stats)}개 마스터")
-
-    feedbacks = stats.get("service_feedbacks", [])
-    print(f"✓ 서비스 피드백: {len(feedbacks)}건")
-
     print()
 
-    # 5. 리포트 생성
-    print("5️⃣  리포트 생성")
+    # 5. 엑셀 파일 생성
+    print("5️⃣  엑셀 파일 생성")
     print("-" * 60)
 
-    # 출력 디렉토리 설정
-    output_dir = os.getenv("REPORT_OUTPUT_DIR", "./reports")
-    os.makedirs(output_dir, exist_ok=True)
+    excel_dir = "./exports"
+    os.makedirs(excel_dir, exist_ok=True)
+    excel_path = f"{excel_dir}/labeling_test_{start_date}.xlsx"
 
-    # 파일명 생성 (YYYY-MM-DD 형식)
-    output_filename = f"weekly_report_{start_date}.md"
-    output_path = os.path.join(output_dir, output_filename)
+    create_labeled_excel(classified_letters, classified_posts, excel_path)
+    print()
 
-    generator = ReportGenerator()
+    # 6. Slack 전송
+    print("6️⃣  Slack 전송")
+    print("-" * 60)
 
-    print("리포트 생성 중...")
-    report, slack_summary = generator.generate_report(
-        stats,
-        start_date,
-        end_date,
-        output_path=output_path
+    slack = SlackNotifier()
+
+    # 메인 메시지
+    main_message = f"[라벨링 테스트] {start_date} ~ {end_date} 분류 결과 (편지 {len(classified_letters)}건, 게시글 {len(classified_posts)}건)"
+    main_response = slack._send_message(main_message)
+
+    if not main_response.get("ok"):
+        print(f"메시지 전송 실패: {main_response.get('error')}")
+        return
+
+    message_ts = main_response.get("ts")
+    print(f"✓ 메인 메시지 전송 완료")
+
+    # 엑셀 파일 업로드
+    print(f"  엑셀 파일 업로드 중...")
+    upload_result = slack.upload_file_to_thread(
+        file_path=excel_path,
+        thread_ts=message_ts,
+        title=f"라벨링 테스트 ({start_date})",
+        comment=""
     )
 
-    print(f"✓ 리포트 생성 완료")
-    print(f"✓ 저장 위치: {output_path}")
-    print(f"✓ 슬랙 요약:\n{slack_summary}")
+    if upload_result.get("ok"):
+        print(f"✓ 업로드 완료: {upload_result.get('file_url')}")
+    else:
+        print(f"❌ 업로드 실패: {upload_result.get('error')}")
+
     print()
-
-    # 6. 완료
     print("=" * 60)
-    print("✅ 주간 리포트 생성 완료!")
+    print("✅ 라벨링 테스트 완료!")
     print("=" * 60)
-    print()
-
-    # 리포트 미리보기 (처음 30줄)
-    print("📄 리포트 미리보기:")
-    print("-" * 60)
-    lines = report.split('\n')
-    for line in lines[:30]:
-        print(line)
-
-    if len(lines) > 30:
-        print("\n... (전체 내용은 생성된 파일을 확인하세요)")
 
 
 if __name__ == "__main__":
