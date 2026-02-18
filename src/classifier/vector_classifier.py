@@ -1,10 +1,32 @@
 """벡터 유사도 기반 콘텐츠 분류 시스템 (하이브리드)"""
+import re
 import json
 from pathlib import Path
 from typing import List, Dict, Any
 from collections import Counter
 from ..vectorstore.chroma_store import ChromaVectorStore
 from .content_classifier import ContentClassifier
+
+
+def preprocess_text(text: str) -> str:
+    """분류 전 텍스트 전처리: 노이즈 제거 및 정규화"""
+    if not text:
+        return text
+
+    # URL 제거
+    text = re.sub(r'https?://\S+', '', text)
+
+    # 반복 문자 정규화 (4회 이상 → 2회): ㅋㅋㅋㅋㅋ → ㅋㅋ, !!!!→ !!
+    text = re.sub(r'(.)\1{3,}', r'\1\1', text)
+
+    # 과도한 개행/공백 정규화
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+
+    # 특수 포맷 문자 제거 (■, ★, ●, ◆ 등)
+    text = re.sub(r'[■★●◆◇▶▷►▲△▽▼○◎□☆♥♡♣♠♦]', '', text)
+
+    return text.strip()
 
 # 라벨링 데이터의 신규 카테고리 → 기존 카테고리 매핑
 NEW_TO_OLD_CATEGORY = {
@@ -14,6 +36,10 @@ NEW_TO_OLD_CATEGORY = {
     "정보 공유": "정보성 글",
     "일상 소통": "일상·공감",
 }
+
+OLD_TO_NEW_CATEGORY = {v: k for k, v in NEW_TO_OLD_CATEGORY.items()}
+# 서비스 피드백은 불편사항과 같은 "부정 피드백"으로 매핑
+OLD_TO_NEW_CATEGORY["서비스 피드백"] = "부정 피드백"
 
 
 class VectorContentClassifier:
@@ -165,7 +191,7 @@ class VectorContentClassifier:
 
                 self.store.add_content(
                     content_id=f"labeled_{item.get('id', count)}",
-                    text=text[:500],
+                    text=preprocess_text(text)[:500],
                     metadata={"category": old_category},
                 )
                 count += 1
@@ -202,6 +228,9 @@ class VectorContentClassifier:
                 "confidence": 0.0,
                 "method": "empty",
             }
+
+        # 전처리 적용
+        content = preprocess_text(content)
 
         # k개의 유사한 예제 검색
         similar = self.store.search_similar(
@@ -314,7 +343,7 @@ class VectorContentClassifier:
                 results[i] = result
             else:
                 valid_indices.append(i)
-                valid_texts.append(text[:500])
+                valid_texts.append(preprocess_text(text)[:500])
 
         # 배치 단위로 ChromaDB 쿼리
         for batch_start in range(0, len(valid_texts), batch_size):
@@ -357,5 +386,122 @@ class VectorContentClassifier:
 
         if self.use_llm_fallback and self.llm_fallback_count > 0:
             print(f"  → LLM fallback 사용: {self.llm_fallback_count}건")
+
+        return results
+
+
+class EnsembleClassifier:
+    """벡터 분류기 + 파인튜닝 분류기 앙상블
+
+    두 모델의 결과를 confidence 가중으로 결합합니다.
+    카테고리는 새 5개 카테고리 체계로 통일합니다.
+    """
+
+    def __init__(
+        self,
+        vector_weight: float = 0.5,
+        finetuned_weight: float = 0.5,
+        **vector_kwargs,
+    ):
+        """
+        Args:
+            vector_weight: 벡터 분류기 기본 가중치
+            finetuned_weight: 파인튜닝 분류기 기본 가중치
+            **vector_kwargs: VectorContentClassifier에 전달할 인자
+        """
+        from ..classifier_v2.finetuned_classifier import FinetunedClassifier
+
+        self.vector_weight = vector_weight
+        self.finetuned_weight = finetuned_weight
+
+        print("앙상블 분류기 초기화...")
+        print("  [1/2] 벡터 분류기 로드")
+        self.vector_clf = VectorContentClassifier(**vector_kwargs)
+        print("  [2/2] 파인튜닝 분류기 로드")
+        self.finetuned_clf = FinetunedClassifier()
+
+    def _to_new_category(self, category: str) -> str:
+        """기존 카테고리를 새 카테고리로 변환 (이미 새 카테고리면 그대로)"""
+        return OLD_TO_NEW_CATEGORY.get(category, category)
+
+    def classify_content(self, content: str) -> Dict[str, Any]:
+        """단일 콘텐츠를 앙상블로 분류"""
+        if not content or len(content.strip()) == 0:
+            return {"category": "내용 없음", "confidence": 0.0, "method": "empty"}
+
+        # 두 분류기 실행
+        vec_result = self.vector_clf.classify_content(content)
+        ft_result = self.finetuned_clf.classify_content(content)
+
+        # 벡터 결과를 새 카테고리로 변환
+        vec_cat = self._to_new_category(vec_result["category"])
+        ft_cat = self._to_new_category(ft_result["category"])
+        vec_conf = vec_result["confidence"]
+        ft_conf = ft_result["confidence"]
+
+        # 동의: confidence 부스트
+        if vec_cat == ft_cat:
+            return {
+                "category": vec_cat,
+                "confidence": round(min(1.0, (vec_conf + ft_conf) / 2 + 0.1), 4),
+                "method": "ensemble_agree",
+            }
+
+        # 불일치: 벡터 분류기를 기본 신뢰 (정확도가 훨씬 높으므로)
+        return {
+            "category": vec_cat,
+            "confidence": round(vec_conf * 0.9, 4),
+            "method": "ensemble_vector",
+        }
+
+    def classify_batch(
+        self,
+        contents: List[Dict[str, Any]],
+        content_field: str = "message",
+        batch_size: int = 200,
+    ) -> List[Dict[str, Any]]:
+        """여러 콘텐츠를 앙상블로 일괄 분류"""
+        print("  앙상블: 벡터 분류기 실행...")
+        vec_results = self.vector_clf.classify_batch(contents, content_field, batch_size)
+        print("  앙상블: 파인튜닝 분류기 실행...")
+        ft_results = self.finetuned_clf.classify_batch(contents, content_field)
+
+        results = []
+        agree_count = 0
+        for vec_item, ft_item in zip(vec_results, ft_results):
+            vec_cls = vec_item["classification"]
+            ft_cls = ft_item["classification"]
+
+            # 빈 콘텐츠
+            if vec_cls["method"] == "empty":
+                results.append(vec_item)
+                continue
+
+            vec_cat = self._to_new_category(vec_cls["category"])
+            ft_cat = self._to_new_category(ft_cls["category"])
+            vec_conf = vec_cls["confidence"]
+            ft_conf = ft_cls["confidence"]
+
+            if vec_cat == ft_cat:
+                agree_count += 1
+                classification = {
+                    "category": vec_cat,
+                    "confidence": round(min(1.0, (vec_conf + ft_conf) / 2 + 0.1), 4),
+                    "method": "ensemble_agree",
+                }
+            else:
+                # 불일치: 벡터 분류기를 기본 신뢰
+                classification = {
+                    "category": vec_cat,
+                    "confidence": round(vec_conf * 0.9, 4),
+                    "method": "ensemble_vector",
+                }
+
+            result = vec_item.copy()
+            result["classification"] = classification
+            results.append(result)
+
+        total = len([r for r in results if r["classification"]["method"] != "empty"])
+        print(f"  앙상블 결과: 동의 {agree_count}/{total} ({agree_count/total*100:.1f}%)")
 
         return results

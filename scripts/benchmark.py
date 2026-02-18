@@ -230,6 +230,64 @@ def benchmark_finetuned_classifier(
     }
 
 
+def benchmark_ensemble_classifier(
+    letters: List[Dict], posts: List[Dict],
+    vector_weight: float = 0.5, finetuned_weight: float = 0.5,
+) -> Dict[str, Any]:
+    """앙상블 분류기 벤치마크"""
+    from src.classifier.vector_classifier import EnsembleClassifier
+
+    classifier = EnsembleClassifier(
+        vector_weight=vector_weight,
+        finetuned_weight=finetuned_weight,
+    )
+
+    start = time.time()
+    classified_letters = classifier.classify_batch(
+        [l.copy() for l in letters], content_field="message"
+    )
+    classified_posts = classifier.classify_batch(
+        [p.copy() for p in posts], content_field="textBody"
+    )
+    elapsed = time.time() - start
+
+    total = len(letters) + len(posts)
+    all_items = classified_letters + classified_posts
+
+    confidences = [
+        item.get("classification", {}).get("confidence", 0) for item in all_items
+    ]
+
+    # method 분포
+    method_dist = Counter(
+        item.get("classification", {}).get("method", "unknown") for item in all_items
+    )
+
+    return {
+        "name": "ensemble",
+        "category_scheme": "new",
+        "elapsed_seconds": round(elapsed, 3),
+        "time_per_item_ms": round(elapsed / total * 1000, 3) if total else 0,
+        "total_items": total,
+        "llm_fallback_calls": 0,
+        "classified_items": all_items,
+        "method_distribution": dict(method_dist),
+        "category_distribution": dict(
+            Counter(
+                item.get("classification", {}).get("category", "미분류")
+                for item in all_items
+            )
+        ),
+        "confidence_stats": {
+            "mean": round(float(np.mean(confidences)), 4),
+            "median": round(float(np.median(confidences)), 4),
+            "min": round(float(np.min(confidences)), 4),
+            "p25": round(float(np.percentile(confidences, 25)), 4),
+            "p75": round(float(np.percentile(confidences, 75)), 4),
+        },
+    }
+
+
 def benchmark_report_generation(
     letters: List[Dict], posts: List[Dict],
     prev_letters: Optional[List[Dict]] = None,
@@ -442,7 +500,7 @@ def main():
     parser = argparse.ArgumentParser(description="파이프라인 벤치마크")
     parser.add_argument(
         "--classifier",
-        choices=["vector", "finetuned", "all"],
+        choices=["vector", "finetuned", "ensemble", "all"],
         default="all",
         help="테스트할 분류기 (기본: all)",
     )
@@ -551,6 +609,8 @@ def main():
         classifiers_to_run.append("vector")
     if args.classifier in ("finetuned", "all"):
         classifiers_to_run.append("finetuned")
+    if args.classifier in ("ensemble", "all"):
+        classifiers_to_run.append("ensemble")
 
     for clf_name in classifiers_to_run:
         print(f"\n>>> {clf_name} 분류기 실행 중...")
@@ -560,8 +620,10 @@ def main():
                 clf_result = benchmark_vector_classifier(
                     letters, posts, use_llm_fallback=args.with_llm_fallback
                 )
-            else:
+            elif clf_name == "finetuned":
                 clf_result = benchmark_finetuned_classifier(letters, posts)
+            elif clf_name == "ensemble":
+                clf_result = benchmark_ensemble_classifier(letters, posts)
 
             # 정확도 평가
             metrics = None
