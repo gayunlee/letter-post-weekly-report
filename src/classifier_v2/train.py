@@ -1,6 +1,6 @@
-"""KcBERT Fine-tuning 스크립트
+"""klue/roberta-base Fine-tuning 스크립트
 
-beomi/kcbert-base 모델을 VOC 분류 태스크에 맞게 fine-tuning합니다.
+VOC 분류 태스크 (5개 카테고리)에 맞게 fine-tuning합니다.
 """
 import json
 import argparse

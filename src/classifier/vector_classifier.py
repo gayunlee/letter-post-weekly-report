@@ -376,28 +376,21 @@ class VectorContentClassifier:
 
 
 class EnsembleClassifier:
-    """벡터 분류기 + 파인튜닝 분류기 앙상블
+    """벡터 분류기(7개) + 파인튜닝 분류기(5개) 앙상블
 
-    두 모델의 결과를 confidence 가중으로 결합합니다.
-    카테고리는 새 5개 카테고리 체계로 통일합니다.
+    벡터 분류기를 기본으로 사용하고, 파인튜닝 결과가 동의하면 신뢰도를 부스트합니다.
+    벡터의 서비스 세부 카테고리(3개)는 비교 시 '서비스 피드백'으로 매핑합니다.
+    최종 출력은 벡터의 7개 카테고리를 유지합니다.
     """
 
-    def __init__(
-        self,
-        vector_weight: float = 0.5,
-        finetuned_weight: float = 0.5,
-        **vector_kwargs,
-    ):
-        """
-        Args:
-            vector_weight: 벡터 분류기 기본 가중치
-            finetuned_weight: 파인튜닝 분류기 기본 가중치
-            **vector_kwargs: VectorContentClassifier에 전달할 인자
-        """
-        from ..classifier_v2.finetuned_classifier import FinetunedClassifier
+    # 벡터 7개 → 파인튜닝 5개 비교용 매핑
+    _COMPARE_MAP = {
+        "서비스 불편사항": "서비스 피드백",
+        "서비스 제보/건의": "서비스 피드백",
+    }
 
-        self.vector_weight = vector_weight
-        self.finetuned_weight = finetuned_weight
+    def __init__(self, **vector_kwargs):
+        from ..classifier_v2.finetuned_classifier import FinetunedClassifier
 
         print("앙상블 분류기 초기화...")
         print("  [1/2] 벡터 분류기 로드")
@@ -405,39 +398,41 @@ class EnsembleClassifier:
         print("  [2/2] 파인튜닝 분류기 로드")
         self.finetuned_clf = FinetunedClassifier()
 
-    def _to_new_category(self, category: str) -> str:
-        """기존 카테고리를 새 카테고리로 변환 (이미 새 카테고리면 그대로)"""
-        return OLD_TO_NEW_CATEGORY.get(category, category)
+    def _to_ft_category(self, category: str) -> str:
+        """벡터 카테고리를 파인튜닝 5개 카테고리로 매핑 (비교용)"""
+        return self._COMPARE_MAP.get(category, category)
+
+    def _combine(self, vec_cat: str, vec_conf: float, ft_cat: str, ft_conf: float) -> Dict[str, Any]:
+        """두 분류기 결과를 결합. 최종 카테고리는 항상 벡터(7개)를 사용."""
+        # 비교: 벡터의 서비스 세부를 합본하여 파인튜닝과 비교
+        vec_comparable = self._to_ft_category(vec_cat)
+
+        if vec_comparable == ft_cat:
+            return {
+                "category": vec_cat,  # 벡터의 원래 7개 카테고리 유지
+                "confidence": round(min(1.0, (vec_conf + ft_conf) / 2 + 0.1), 4),
+                "method": "ensemble_agree",
+            }
+
+        # 불일치: 벡터 기본 신뢰
+        return {
+            "category": vec_cat,
+            "confidence": round(vec_conf * 0.9, 4),
+            "method": "ensemble_vector",
+        }
 
     def classify_content(self, content: str) -> Dict[str, Any]:
         """단일 콘텐츠를 앙상블로 분류"""
         if not content or len(content.strip()) == 0:
             return {"category": "내용 없음", "confidence": 0.0, "method": "empty"}
 
-        # 두 분류기 실행
         vec_result = self.vector_clf.classify_content(content)
         ft_result = self.finetuned_clf.classify_content(content)
 
-        # 벡터 결과를 새 카테고리로 변환
-        vec_cat = self._to_new_category(vec_result["category"])
-        ft_cat = self._to_new_category(ft_result["category"])
-        vec_conf = vec_result["confidence"]
-        ft_conf = ft_result["confidence"]
-
-        # 동의: confidence 부스트
-        if vec_cat == ft_cat:
-            return {
-                "category": vec_cat,
-                "confidence": round(min(1.0, (vec_conf + ft_conf) / 2 + 0.1), 4),
-                "method": "ensemble_agree",
-            }
-
-        # 불일치: 벡터 분류기를 기본 신뢰 (정확도가 훨씬 높으므로)
-        return {
-            "category": vec_cat,
-            "confidence": round(vec_conf * 0.9, 4),
-            "method": "ensemble_vector",
-        }
+        return self._combine(
+            vec_result["category"], vec_result["confidence"],
+            ft_result["category"], ft_result["confidence"],
+        )
 
     def classify_batch(
         self,
@@ -457,30 +452,16 @@ class EnsembleClassifier:
             vec_cls = vec_item["classification"]
             ft_cls = ft_item["classification"]
 
-            # 빈 콘텐츠
             if vec_cls["method"] == "empty":
                 results.append(vec_item)
                 continue
 
-            vec_cat = self._to_new_category(vec_cls["category"])
-            ft_cat = self._to_new_category(ft_cls["category"])
-            vec_conf = vec_cls["confidence"]
-            ft_conf = ft_cls["confidence"]
-
-            if vec_cat == ft_cat:
+            classification = self._combine(
+                vec_cls["category"], vec_cls["confidence"],
+                ft_cls["category"], ft_cls["confidence"],
+            )
+            if classification["method"] == "ensemble_agree":
                 agree_count += 1
-                classification = {
-                    "category": vec_cat,
-                    "confidence": round(min(1.0, (vec_conf + ft_conf) / 2 + 0.1), 4),
-                    "method": "ensemble_agree",
-                }
-            else:
-                # 불일치: 벡터 분류기를 기본 신뢰
-                classification = {
-                    "category": vec_cat,
-                    "confidence": round(vec_conf * 0.9, 4),
-                    "method": "ensemble_vector",
-                }
 
             result = vec_item.copy()
             result["classification"] = classification

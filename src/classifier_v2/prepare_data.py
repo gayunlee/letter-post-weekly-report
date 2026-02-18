@@ -17,39 +17,29 @@ from collections import Counter
 import random
 
 
-# 새로운 5개 카테고리 매핑 (라벨 ID)
-CATEGORY_TO_ID_V2 = {
-    "긍정 피드백": 0,
-    "부정 피드백": 1,
-    "질문/문의": 2,
-    "정보 공유": 3,
-    "일상 소통": 4,
-}
-
-ID_TO_CATEGORY_V2 = {v: k for k, v in CATEGORY_TO_ID_V2.items()}
-
-# 기존 6개 카테고리 (레거시)
-CATEGORY_TO_ID_LEGACY = {
+# 5개 카테고리 매핑 (서비스 3개 → 1개 합본)
+CATEGORY_TO_ID = {
     "감사·후기": 0,
     "질문·토론": 1,
     "정보성 글": 2,
     "서비스 피드백": 3,
-    "불편사항": 4,
-    "일상·공감": 5,
+    "일상·공감": 4,
 }
 
-ID_TO_CATEGORY_LEGACY = {v: k for k, v in CATEGORY_TO_ID_LEGACY.items()}
+ID_TO_CATEGORY = {v: k for k, v in CATEGORY_TO_ID.items()}
 
-# 기본값: 새 카테고리 사용
-CATEGORY_TO_ID = CATEGORY_TO_ID_V2
-ID_TO_CATEGORY = ID_TO_CATEGORY_V2
+# 서비스 하위 카테고리 → 서비스 피드백으로 통합
+SERVICE_MERGE = {
+    "서비스 불편사항": "서비스 피드백",
+    "서비스 제보/건의": "서비스 피드백",
+}
 
 
 def load_labeling_data(labeling_file: Path) -> List[Dict]:
-    """라벨링된 데이터 로드 (새 카테고리)
+    """통합 라벨링 데이터 로드 (서비스 하위 카테고리 → 서비스 피드백 합본)
 
     Args:
-        labeling_file: 라벨링 데이터 파일 경로
+        labeling_file: 라벨링 데이터 파일 경로 (labeled_combined.json)
     """
     if not labeling_file.exists():
         raise FileNotFoundError(f"라벨링 파일을 찾을 수 없습니다: {labeling_file}")
@@ -62,17 +52,16 @@ def load_labeling_data(labeling_file: Path) -> List[Dict]:
 
     for item in raw_data:
         text = item.get("text", "").strip()
-        category = item.get("new_label")  # 새로 라벨링된 카테고리
+        category = item.get("category", "")
 
         if not text:
             skipped += 1
             continue
 
-        if category is None:
-            skipped += 1
-            continue
+        # 서비스 하위 카테고리 합본
+        category = SERVICE_MERGE.get(category, category)
 
-        if category not in CATEGORY_TO_ID_V2:
+        if category not in CATEGORY_TO_ID:
             print(f"  경고: 알 수 없는 카테고리 '{category}'")
             skipped += 1
             continue
@@ -80,62 +69,14 @@ def load_labeling_data(labeling_file: Path) -> List[Dict]:
         all_data.append({
             "text": text,
             "category": category,
-            "label": CATEGORY_TO_ID_V2[category],
-            "source": item.get("source", "unknown"),
-            "id": item.get("id", ""),
+            "label": CATEGORY_TO_ID[category],
         })
 
     if skipped > 0:
-        print(f"  건너뛴 항목: {skipped}건 (미라벨링 또는 빈 텍스트)")
+        print(f"  건너뛴 항목: {skipped}건")
 
     return all_data
 
-
-def load_classified_data(data_dir: Path, trusted_files: List[str] = None) -> List[Dict]:
-    """분류된 데이터 로드 (기존 카테고리 - 레거시)
-
-    Args:
-        data_dir: 데이터 디렉토리
-        trusted_files: 신뢰할 수 있는 파일명 리스트 (None이면 전체)
-    """
-    all_data = []
-
-    for f in sorted(data_dir.glob("*.json")):
-        # 신뢰 파일 필터링
-        if trusted_files and f.name not in trusted_files:
-            continue
-        with open(f, encoding="utf-8") as file:
-            data = json.load(file)
-
-            # 편지 데이터
-            for item in data.get("letters", []):
-                text = item.get("message", "").strip()
-                category = item.get("classification", {}).get("category")
-                if text and category in CATEGORY_TO_ID_LEGACY:
-                    all_data.append({
-                        "text": text,
-                        "category": category,
-                        "label": CATEGORY_TO_ID_LEGACY[category],
-                        "source": "letter",
-                        "file": f.name
-                    })
-
-            # 게시글 데이터
-            for item in data.get("posts", []):
-                # 게시글은 textBody 또는 body 필드 사용
-                text = item.get("textBody") or item.get("body") or ""
-                text = text.strip()
-                category = item.get("classification", {}).get("category")
-                if text and category in CATEGORY_TO_ID_LEGACY:
-                    all_data.append({
-                        "text": text,
-                        "category": category,
-                        "label": CATEGORY_TO_ID_LEGACY[category],
-                        "source": "post",
-                        "file": f.name
-                    })
-
-    return all_data
 
 
 def stratified_split(
@@ -204,61 +145,35 @@ def print_distribution(data: List[Dict], name: str):
 def main():
     parser = argparse.ArgumentParser(description="훈련 데이터 준비")
     parser.add_argument(
-        "--legacy",
-        action="store_true",
-        help="기존 6개 카테고리 사용 (레거시 모드)"
-    )
-    parser.add_argument(
         "--labeling-file",
         type=str,
         default=None,
-        help="라벨링 데이터 파일 경로 (기본: data/labeling/labeling_data.json)"
+        help="라벨링 데이터 파일 경로 (기본: data/training_data/labeled_combined.json)"
     )
     parser.add_argument(
         "--output-dir",
         type=str,
         default=None,
-        help="출력 디렉토리 (기본: data/training_data_v2)"
+        help="출력 디렉토리 (기본: data/training_data)"
     )
     args = parser.parse_args()
 
-    # 경로 설정
     project_root = Path(__file__).parent.parent.parent
+    labeling_file = Path(args.labeling_file) if args.labeling_file else project_root / "data" / "training_data" / "labeled_combined.json"
+    output_dir = Path(args.output_dir) if args.output_dir else project_root / "data" / "training_data"
 
-    if args.legacy:
-        # 레거시 모드: 기존 분류 데이터 사용
-        data_dir = project_root / "data" / "classified_data"
-        output_dir = Path(args.output_dir) if args.output_dir else project_root / "data" / "training_data"
-        trusted_files = ["2026-01-05.json"]
+    print("=" * 50)
+    print("훈련 데이터 준비 (5개 카테고리, 서비스 합본)")
+    print("=" * 50)
+    print(f"라벨링 파일: {labeling_file}")
 
-        print("=" * 50)
-        print("훈련 데이터 준비 (레거시 모드 - 6개 카테고리)")
-        print("=" * 50)
-        print(f"신뢰 파일: {trusted_files}")
-
-        # 데이터 로드
-        print(f"\n데이터 로드 중: {data_dir}")
-        all_data = load_classified_data(data_dir, trusted_files=trusted_files)
-    else:
-        # 새 모드: 라벨링 데이터 사용
-        labeling_file = Path(args.labeling_file) if args.labeling_file else project_root / "data" / "labeling" / "labeling_data.json"
-        output_dir = Path(args.output_dir) if args.output_dir else project_root / "data" / "training_data_v2"
-
-        print("=" * 50)
-        print("훈련 데이터 준비 (새 카테고리 - 5개)")
-        print("=" * 50)
-        print(f"라벨링 파일: {labeling_file}")
-
-        # 데이터 로드
-        print(f"\n데이터 로드 중...")
-        all_data = load_labeling_data(labeling_file)
+    print(f"\n데이터 로드 중...")
+    all_data = load_labeling_data(labeling_file)
 
     print(f"총 {len(all_data)}건 로드됨")
 
     if len(all_data) == 0:
         print("\n오류: 로드된 데이터가 없습니다.")
-        if not args.legacy:
-            print("라벨링을 먼저 완료하세요: python scripts/labeling_tool.py")
         return
 
     print_distribution(all_data, "전체 데이터")
@@ -279,14 +194,12 @@ def main():
     save_splits(train, val, test, output_dir)
 
     # 카테고리 매핑 저장
-    category_mapping = CATEGORY_TO_ID_LEGACY if args.legacy else CATEGORY_TO_ID_V2
     mapping_file = output_dir / "category_mapping.json"
     with open(mapping_file, "w", encoding="utf-8") as f:
         json.dump({
-            "category_to_id": category_mapping,
-            "id_to_category": {v: k for k, v in category_mapping.items()},
-            "num_labels": len(category_mapping),
-            "mode": "legacy" if args.legacy else "v2"
+            "category_to_id": CATEGORY_TO_ID,
+            "id_to_category": ID_TO_CATEGORY,
+            "num_labels": len(CATEGORY_TO_ID),
         }, f, ensure_ascii=False, indent=2)
     print(f"  카테고리 매핑 → {mapping_file}")
 
