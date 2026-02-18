@@ -3,28 +3,33 @@ import os
 from typing import Dict, Any, List, Tuple
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from anthropic import Anthropic
+from openai import OpenAI
 from dotenv import load_dotenv
 from src.utils.text_utils import clean_text
 
 load_dotenv()
 
+# LLM 모델 설정
+DEFAULT_MODEL = "gpt-4o-mini"
+
 
 class ReportGenerator:
     """주간 리포트 생성기"""
 
-    def __init__(self, api_key: str = None):
+    def __init__(self, api_key: str = None, model: str = None):
         """
         ReportGenerator 초기화
 
         Args:
-            api_key: Anthropic API 키
+            api_key: OpenAI API 키
+            model: 사용할 모델명 (기본: gpt-4o-mini)
         """
-        self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("CALLME_OPENAI_API_KEY")
         if not self.api_key:
-            raise ValueError("ANTHROPIC_API_KEY가 설정되지 않았습니다.")
+            raise ValueError("OPENAI_API_KEY 또는 CALLME_OPENAI_API_KEY가 설정되지 않았습니다.")
 
-        self.client = Anthropic(api_key=self.api_key)
+        self.model = model or DEFAULT_MODEL
+        self.client = OpenAI(api_key=self.api_key)
 
     def generate_report(
         self,
@@ -115,7 +120,7 @@ class ReportGenerator:
 
 """
 
-        # Claude API로 인사이트 생성
+        # LLM API로 인사이트 생성
         insight = self._generate_insight_summary(stats)
         summary += f"{insight}\n"
 
@@ -127,7 +132,7 @@ class ReportGenerator:
         return summary
 
     def _generate_insight_summary(self, stats: Dict[str, Any]) -> str:
-        """Claude API를 사용한 인사이트 요약 생성"""
+        """LLM API를 사용한 인사이트 요약 생성"""
         total = stats["total_stats"]
         category_stats = stats["category_stats"]
 
@@ -148,8 +153,8 @@ class ReportGenerator:
 markdown 불릿 포인트 형식으로 작성해주세요."""
 
         try:
-            message = self.client.messages.create(
-                model="claude-sonnet-4-5-20250929",
+            response = self.client.chat.completions.create(
+                model=self.model,
                 max_tokens=500,
                 temperature=0.3,
                 messages=[
@@ -157,14 +162,14 @@ markdown 불릿 포인트 형식으로 작성해주세요."""
                 ]
             )
 
-            return message.content[0].text.strip()
+            return response.choices[0].message.content.strip()
 
         except Exception as e:
             # API 오류시 기본 텍스트 반환
             return f"- 이번 주 전체 이용자 반응 규모는 총 {total['this_week']['total']}건입니다."
 
     def _generate_master_details(self, stats: Dict[str, Any]) -> str:
-        """마스터별 상세 리포트 생성 (Claude API 병렬 호출)"""
+        """마스터별 상세 리포트 생성 (LLM API 병렬 호출)"""
         master_stats = stats["master_stats"]
 
         # 총 건수로 정렬
@@ -180,7 +185,7 @@ markdown 불릿 포인트 형식으로 작성해주세요."""
             if data["this_week"]["total"] > 0
         ]
 
-        # Claude API 병렬 호출로 인사이트 생성
+        # LLM API 병렬 호출로 인사이트 생성
         insights = {}
         max_workers = min(5, len(active_masters))  # 최대 5개 동시 호출
         print(f"  마스터 인사이트 생성 중... ({len(active_masters)}명, 병렬 {max_workers}개)")
@@ -247,7 +252,7 @@ markdown 불릿 포인트 형식으로 작성해주세요."""
         return details
 
     def _generate_master_insight(self, master_name: str, data: Dict[str, Any]) -> Dict[str, str]:
-        """Claude API로 마스터별 상세 인사이트 생성"""
+        """LLM API로 마스터별 상세 인사이트 생성"""
         contents = data.get("contents", [])
         categories = data.get("categories", {})
         change = data.get("change", {})
@@ -355,8 +360,8 @@ JSON 형식으로 응답해주세요:
 {{"summary": "...", "main_content": "...", "service_feedback": "...", "checkpoints": "..."}}"""
 
         try:
-            message = self.client.messages.create(
-                model="claude-sonnet-4-5-20250929",
+            response = self.client.chat.completions.create(
+                model=self.model,
                 max_tokens=1500,
                 temperature=0.3,
                 messages=[
@@ -364,7 +369,7 @@ JSON 형식으로 응답해주세요:
                 ]
             )
 
-            response_text = message.content[0].text.strip()
+            response_text = response.choices[0].message.content.strip()
 
             # JSON 파싱
             import json
