@@ -94,13 +94,13 @@ def generate_week_data(start_date, end_date, data_store, master_info=None):
 
 
 def main():
-    # 대상 주간 (12월 29일 ~ 1월 4일)
-    target_start = "2025-12-29"
-    target_end = "2026-01-05"  # 1-4 다음날까지 (exclusive)
+    # 대상 주간 (2월 2일 ~ 2월 8일)
+    target_start = "2026-02-02"
+    target_end = "2026-02-09"  # 2-8 다음날까지 (exclusive)
 
-    # 전주 (12월 22일 ~ 12월 28일)
-    prev_start = "2025-12-22"
-    prev_end = "2025-12-29"
+    # 전주 (1월 26일 ~ 2월 1일)
+    prev_start = "2026-01-26"
+    prev_end = "2026-02-02"
 
     print("="*60)
     print("📊 특정 주간 리포트 생성")
