@@ -132,7 +132,7 @@ class VectorContentClassifier:
         use_llm_fallback: bool = False,
         confidence_threshold: float = 0.3,
         embedding_model: str = None,
-        k_neighbors: int = 5,
+        k_neighbors: int = 3,
     ):
         """
         Args:
