@@ -1,22 +1,27 @@
 """벡터 유사도 기반 콘텐츠 분류 시스템 (하이브리드)"""
+import json
+from pathlib import Path
 from typing import List, Dict, Any
+from collections import Counter
 from ..vectorstore.chroma_store import ChromaVectorStore
 from .content_classifier import ContentClassifier
 
+# 라벨링 데이터의 신규 카테고리 → 기존 카테고리 매핑
+NEW_TO_OLD_CATEGORY = {
+    "긍정 피드백": "감사·후기",
+    "부정 피드백": "불편사항",
+    "질문/문의": "질문·토론",
+    "정보 공유": "정보성 글",
+    "일상 소통": "일상·공감",
+}
+
 
 class VectorContentClassifier:
-    """벡터 유사도 기반 콘텐츠 분류기 (빠른 분류)"""
+    """벡터 유사도 기반 콘텐츠 분류기 (k-NN 투표 방식)"""
 
-    # Few-shot 학습 예제 (분류 가이드)
-    # 핵심 구분 기준:
-    # - 감사·후기: "감사", "고맙", "덕분에", 긍정적 투자 후기
-    # - 질문·토론: "~인가요?", "~할까요?", "궁금", 투자/비중/종목 질문
-    # - 정보성 글: 정보 공유, 뉴스 링크, 공지 (질문 없음)
-    # - 서비스 피드백: 파일/링크/배송/일정 문의 (플랫폼 관련)
-    # - 불편사항: "답답", "불편", "소외감", 부정적 감정
-    # - 일상·공감: 가입인사, 안부, 축하, 개인 이야기
+    # 기본 학습 예제 (라벨링 데이터가 없을 때 fallback)
     TRAINING_EXAMPLES = [
-        # ========== 감사·후기 (12개) - 감사 표현, 긍정적 투자 후기 ==========
+        # ========== 감사·후기 (12개) ==========
         {"content": "감사합니다", "category": "감사·후기"},
         {"content": "정보 감사합니다", "category": "감사·후기"},
         {"content": "답변주셔서 고맙습니다", "category": "감사·후기"},
@@ -30,7 +35,7 @@ class VectorContentClassifier:
         {"content": "오프라인 강의 참석했는데 정말 유익했습니다.", "category": "감사·후기"},
         {"content": "두환쌤 덕에 쉽게 주식합니다. 주식은 계속내리다가 잠깐 오르니깐요.", "category": "감사·후기"},
 
-        # ========== 질문·토론 (12개) - 투자/비중/종목 질문 ==========
+        # ========== 질문·토론 (12개) ==========
         {"content": "삼성전자를 스터디 목록에 편입하지 않으시는 이유가 궁금합니다.", "category": "질문·토론"},
         {"content": "포트폴리오 종목들 비중도 같이 알려주실수있나요?", "category": "질문·토론"},
         {"content": "비트코인 rsi는 일봉 기준인가요?", "category": "질문·토론"},
@@ -44,7 +49,7 @@ class VectorContentClassifier:
         {"content": "IRP는 어떻게 세팅해야할까요?", "category": "질문·토론"},
         {"content": "템퍼스 AI 주식을 갖고 있는데 계속 가지고 있어야 할지 팔아야 할지 모르겠어요.", "category": "질문·토론"},
 
-        # ========== 정보성 글 (12개) - 정보 공유, 뉴스, 공지 ==========
+        # ========== 정보성 글 (12개) ==========
         {"content": "AI 데이터센터 수요가 폭발적으로 증가하고 있습니다.", "category": "정보성 글"},
         {"content": "포트폴리오에서 반도체 비중을 16%에서 28%까지 올렸습니다.", "category": "정보성 글"},
         {"content": "지난밤 미국 원전주 포함 에너지주가 폭등했습니다.", "category": "정보성 글"},
@@ -58,7 +63,7 @@ class VectorContentClassifier:
         {"content": "올해 1년간 결산입니다. 한국자산 +166.8%, 해외자산 +23.9% 수익률입니다.", "category": "정보성 글"},
         {"content": "제 의견을 드리자면 두 종목간에 매수매도하여 평단을 낮추는건 크게 의미가 없을듯합니다.", "category": "정보성 글"},
 
-        # ========== 서비스 피드백 (10개) - 파일/링크/배송/일정 문의 ==========
+        # ========== 서비스 피드백 (10개) ==========
         {"content": "강의 자료 링크가 연결되지 않습니다. 확인 부탁드립니다.", "category": "서비스 피드백"},
         {"content": "녹음 파일이 안보이던데 시간이 더 걸리는 건가요?", "category": "서비스 피드백"},
         {"content": "컴퍼런스 일정 안내를 받지 못했습니다. 언제 하는지 알 수 있을까요?", "category": "서비스 피드백"},
@@ -70,7 +75,7 @@ class VectorContentClassifier:
         {"content": "홍매화반 교재 언제 보내주세요?", "category": "서비스 피드백"},
         {"content": "상품 변경 칸이 없어서요~ 변경이 가능할까요?", "category": "서비스 피드백"},
 
-        # ========== 불편사항 (10개) - 불만, 답답함, 소외감, 부정적 감정 ==========
+        # ========== 불편사항 (10개) ==========
         {"content": "앱이 자꾸 튕겨요. 너무 답답합니다.", "category": "불편사항"},
         {"content": "결제를 했는데 강의가 안 열려요. 정말 불편합니다.", "category": "불편사항"},
         {"content": "매번 같은 질문인데 왜 답변을 안 해주시는 건가요? 소통이 안 되는 느낌입니다.", "category": "불편사항"},
@@ -82,7 +87,7 @@ class VectorContentClassifier:
         {"content": "일주일에 한번도 안 올라오는 컨텐츠에 무엇을 기대할까요...", "category": "불편사항"},
         {"content": "문의를 드렸는데 답이 없네요. 실망입니다.", "category": "불편사항"},
 
-        # ========== 일상·공감 (10개) - 가입인사, 안부, 축하 ==========
+        # ========== 일상·공감 (10개) ==========
         {"content": "새해 복 많이 받으세요!", "category": "일상·공감"},
         {"content": "축하드립니다! 너무 너무 축하드려요.", "category": "일상·공감"},
         {"content": "주말은 잘 쉬시길 바랍니다.", "category": "일상·공감"},
@@ -95,24 +100,33 @@ class VectorContentClassifier:
         {"content": "요즘 부담감이 심해보여 한마디 남깁니다. 너무 큰 책임감으로 스스로를 옥죄지마세요.", "category": "일상·공감"},
     ]
 
-    def __init__(self, collection_name: str = "classification_guide", use_llm_fallback: bool = False, confidence_threshold: float = 0.3):
+    def __init__(
+        self,
+        collection_name: str = "classification_guide",
+        use_llm_fallback: bool = False,
+        confidence_threshold: float = 0.3,
+        embedding_model: str = None,
+        k_neighbors: int = 5,
+    ):
         """
-        VectorContentClassifier 초기화
-
         Args:
             collection_name: ChromaDB 컬렉션 이름
             use_llm_fallback: confidence가 낮을 때 LLM으로 재분류 여부
             confidence_threshold: LLM fallback을 위한 confidence 임계값
+            embedding_model: 임베딩 모델명 (None이면 기본 한국어 모델)
+            k_neighbors: k-NN 투표에 사용할 이웃 수
         """
         self.collection_name = collection_name
         self.use_llm_fallback = use_llm_fallback
         self.confidence_threshold = confidence_threshold
+        self.k_neighbors = k_neighbors
         self.llm_classifier = None
         self.llm_fallback_count = 0
 
         self.store = ChromaVectorStore(
             collection_name=collection_name,
-            persist_directory="./chroma_db"
+            persist_directory="./chroma_db",
+            embedding_model=embedding_model,
         )
 
         # LLM fallback 활성화시 분류기 초기화
@@ -127,85 +141,124 @@ class VectorContentClassifier:
         if self.store.collection.count() == 0:
             print("분류 가이드 데이터 초기화 중...")
             self._initialize_training_data()
-            print(f"✓ {len(self.TRAINING_EXAMPLES)}개 예제 저장 완료")
 
     def _initialize_training_data(self):
-        """Few-shot 학습 예제를 벡터 스토어에 저장"""
+        """학습 예제를 벡터 스토어에 저장 (라벨링 데이터 우선, 없으면 기본 예제)"""
+        count = 0
+
+        # 1) 라벨링 데이터 로드 시도
+        labeling_file = Path(__file__).parent.parent.parent / "data" / "labeling" / "refined_labeled.json"
+        if labeling_file.exists():
+            with open(labeling_file, encoding="utf-8") as f:
+                labeled_data = json.load(f)
+
+            for item in labeled_data:
+                text = item.get("text", "").strip()
+                new_label = item.get("new_label", "")
+                if not text or not new_label:
+                    continue
+
+                # 신규 카테고리 → 기존 카테고리 매핑
+                old_category = NEW_TO_OLD_CATEGORY.get(new_label)
+                if not old_category:
+                    continue
+
+                self.store.add_content(
+                    content_id=f"labeled_{item.get('id', count)}",
+                    text=text[:500],
+                    metadata={"category": old_category},
+                )
+                count += 1
+
+            print(f"  라벨링 데이터 {count}건 로드")
+
+        # 2) 기본 예제도 추가 (라벨링 데이터와 중복될 수 있지만 다양성 보장)
         for i, example in enumerate(self.TRAINING_EXAMPLES):
             self.store.add_content(
                 content_id=f"example_{i}",
                 text=example["content"],
-                metadata={"category": example["category"]}
+                metadata={"category": example["category"]},
             )
+            count += 1
+
+        print(f"  총 {count}건 학습 예제 저장 완료")
 
     def classify_content(self, content: str) -> Dict[str, Any]:
         """
-        단일 콘텐츠를 벡터 유사도로 분류 (하이브리드: low confidence시 LLM fallback)
+        단일 콘텐츠를 k-NN 투표로 분류
+
+        cosine distance 사용: distance=0이면 동일, distance=1이면 직교
+        confidence = 1 - distance (cosine similarity)
 
         Args:
             content: 분류할 콘텐츠 텍스트
 
         Returns:
-            {"category": str, "confidence": float, "similar_example": str, "method": str}
+            {"category": str, "confidence": float, "method": str}
         """
         if not content or len(content.strip()) == 0:
             return {
                 "category": "내용 없음",
                 "confidence": 0.0,
-                "similar_example": "",
-                "method": "empty"
+                "method": "empty",
             }
 
-        # 가장 유사한 예제 검색
+        # k개의 유사한 예제 검색
         similar = self.store.search_similar(
-            query_text=content[:500],  # 처음 500자만 사용
-            n_results=1
+            query_text=content[:500],
+            n_results=self.k_neighbors,
         )
 
-        if similar and len(similar) > 0:
-            top_match = similar[0]
-            category = top_match["metadata"].get("category", "미분류")
-
-            # 거리를 confidence로 변환 (거리가 가까울수록 높은 confidence)
-            distance = top_match.get("distance", 1.0)
-            confidence = max(0.0, min(1.0, 1.0 - distance))
-
-            # LLM fallback: confidence가 낮으면 LLM으로 재분류
-            if self.use_llm_fallback and self.llm_classifier and confidence < self.confidence_threshold:
-                try:
-                    llm_result = self.llm_classifier.classify_content(content)
-                    self.llm_fallback_count += 1
-                    return {
-                        "category": llm_result.get("category", category),
-                        "confidence": 0.8 if llm_result.get("confidence") == "높음" else 0.6,
-                        "similar_example": "",
-                        "method": "llm",
-                        "reason": llm_result.get("reason", "")
-                    }
-                except Exception:
-                    pass  # LLM 실패시 벡터 결과 사용
-
-            return {
-                "category": category,
-                "confidence": confidence,
-                "similar_example": top_match["text"][:100],
-                "method": "vector"
-            }
-        else:
+        if not similar:
             return {
                 "category": "미분류",
                 "confidence": 0.0,
-                "similar_example": "",
-                "method": "none"
+                "method": "none",
             }
+
+        # k-NN 가중 투표: similarity(=1-distance)를 가중치로 사용
+        vote_weights = Counter()
+        for match in similar:
+            category = match["metadata"].get("category", "미분류")
+            distance = match.get("distance", 1.0)
+            similarity = max(0.0, 1.0 - distance)
+            vote_weights[category] += similarity
+
+        # 최다 득표 카테고리
+        if not vote_weights:
+            return {"category": "미분류", "confidence": 0.0, "method": "none"}
+
+        best_category = vote_weights.most_common(1)[0][0]
+        total_weight = sum(vote_weights.values())
+        confidence = vote_weights[best_category] / total_weight if total_weight > 0 else 0.0
+
+        # LLM fallback: confidence가 낮으면 LLM으로 재분류
+        if self.use_llm_fallback and self.llm_classifier and confidence < self.confidence_threshold:
+            try:
+                llm_result = self.llm_classifier.classify_content(content)
+                self.llm_fallback_count += 1
+                return {
+                    "category": llm_result.get("category", best_category),
+                    "confidence": 0.8 if llm_result.get("confidence") == "높음" else 0.6,
+                    "method": "llm",
+                    "reason": llm_result.get("reason", ""),
+                }
+            except Exception:
+                pass
+
+        return {
+            "category": best_category,
+            "confidence": round(confidence, 4),
+            "method": "vector",
+        }
 
     def classify_batch(
         self,
         contents: List[Dict[str, Any]],
-        content_field: str = "message"
+        content_field: str = "message",
     ) -> List[Dict[str, Any]]:
         """
-        여러 콘텐츠를 일괄 분류 (하이브리드: 벡터 + LLM fallback)
+        여러 콘텐츠를 일괄 분류 (k-NN 투표 + 선택적 LLM fallback)
 
         Args:
             contents: 분류할 콘텐츠 리스트
@@ -215,24 +268,21 @@ class VectorContentClassifier:
             분류 결과가 추가된 콘텐츠 리스트
         """
         results = []
-        self.llm_fallback_count = 0  # 카운터 리셋
+        self.llm_fallback_count = 0
 
         for i, item in enumerate(contents):
             content_text = item.get(content_field, "")
 
             classification = self.classify_content(content_text)
 
-            # 원본 데이터에 분류 결과 추가
             result = item.copy()
             result["classification"] = classification
             results.append(result)
 
-            # 진행 상황 출력 (100건마다)
             if (i + 1) % 100 == 0:
                 llm_info = f" (LLM: {self.llm_fallback_count}건)" if self.use_llm_fallback else ""
                 print(f"  진행: {i + 1}/{len(contents)} 완료{llm_info}")
 
-        # 최종 LLM 사용 통계
         if self.use_llm_fallback and self.llm_fallback_count > 0:
             print(f"  → LLM fallback 사용: {self.llm_fallback_count}건")
 
