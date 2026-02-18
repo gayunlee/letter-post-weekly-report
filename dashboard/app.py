@@ -30,6 +30,7 @@ TOPIC_COLORS = {
 
 TWO_AXIS_DIR = Path("data/classified_data_two_axis")
 ONE_AXIS_DIR = Path("data/classified_data")
+SUB_THEMES_DIR = Path("data/sub_themes")
 
 
 # ── 데이터 로드 ──────────────────────────────────────────────────────
@@ -211,8 +212,8 @@ df_filtered = df[mask]
 # ── 탭 구성 ──────────────────────────────────────────────────────────
 
 if is_two_axis:
-    tab_overview, tab_master, tab_alerts, tab_explorer = st.tabs(
-        ["개요", "마스터 분석", "감성 알림", "콘텐츠 탐색"]
+    tab_overview, tab_master, tab_alerts, tab_sub_themes, tab_explorer = st.tabs(
+        ["개요", "마스터 분석", "감성 알림", "세부 분석", "콘텐츠 탐색"]
     )
 else:
     tab_overview, tab_master, tab_explorer = st.tabs(
@@ -259,7 +260,7 @@ with tab_overview:
             labels=dict(x="감성", y="주제", color="건수"),
         )
         fig_heatmap.update_layout(height=350)
-        st.plotly_chart(fig_heatmap, use_container_width=True)
+        st.plotly_chart(fig_heatmap, use_container_width=True)  # plotly chart param, not deprecated
 
         # 주제별 감성 비율 스택 바
         st.subheader("주제별 감성 비율")
@@ -273,7 +274,7 @@ with tab_overview:
             barmode="stack",
         )
         fig_stack.update_layout(height=350)
-        st.plotly_chart(fig_stack, use_container_width=True)
+        st.plotly_chart(fig_stack, use_container_width=True)  # plotly chart param, not deprecated
 
     else:
         # 1축: 카테고리 분포
@@ -282,7 +283,7 @@ with tab_overview:
         cat_counts.columns = ["카테고리", "건수"]
         fig_cat = px.bar(cat_counts, x="카테고리", y="건수", color="카테고리")
         fig_cat.update_layout(height=350)
-        st.plotly_chart(fig_cat, use_container_width=True)
+        st.plotly_chart(fig_cat, use_container_width=True)  # plotly chart param, not deprecated
 
 # ═══════════════════════════════════════════════════════════════════════
 # 탭 2: 마스터 분석
@@ -309,7 +310,7 @@ with tab_master:
             category_orders={"마스터": master_order},
         )
         fig_master.update_layout(height=500, xaxis_tickangle=-45)
-        st.plotly_chart(fig_master, use_container_width=True)
+        st.plotly_chart(fig_master, use_container_width=True)  # plotly chart param, not deprecated
 
         # 마스터별 부정 비율 테이블
         st.subheader("마스터별 부정 비율")
@@ -336,7 +337,7 @@ with tab_master:
                 subset=["부정비율(%)"],
                 cmap="Reds",
             ),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -365,7 +366,7 @@ with tab_master:
                 markers=True,
             )
             fig_trend.update_layout(height=350)
-            st.plotly_chart(fig_trend, use_container_width=True)
+            st.plotly_chart(fig_trend, use_container_width=True)  # plotly chart param, not deprecated
 
             # 부정 비율 추이
             week_neg_ratio = []
@@ -387,7 +388,7 @@ with tab_master:
                 color_discrete_sequence=["#e74c3c"],
             )
             fig_neg.update_layout(height=300, title="부정 비율 추이")
-            st.plotly_chart(fig_neg, use_container_width=True)
+            st.plotly_chart(fig_neg, use_container_width=True)  # plotly chart param, not deprecated
 
     else:
         # 1축: 마스터별 카테고리 분포
@@ -404,7 +405,7 @@ with tab_master:
             category_orders={"마스터": master_order},
         )
         fig_master_cat.update_layout(height=500, xaxis_tickangle=-45)
-        st.plotly_chart(fig_master_cat, use_container_width=True)
+        st.plotly_chart(fig_master_cat, use_container_width=True)  # plotly chart param, not deprecated
 
 # ═══════════════════════════════════════════════════════════════════════
 # 탭 3: 감성 알림 (2축 전용)
@@ -462,7 +463,7 @@ if is_two_axis:
                 st.error(f"부정 급증: {len(spikes)}명")
                 st.dataframe(
                     spikes.style.background_gradient(subset=["변화(%p)"], cmap="Reds"),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
 
@@ -490,7 +491,7 @@ if is_two_axis:
                 st.success(f"부정 개선: {len(drops)}명")
                 st.dataframe(
                     drops.style.background_gradient(subset=["변화(%p)"], cmap="Greens_r"),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
             else:
@@ -502,12 +503,124 @@ if is_two_axis:
             st.subheader("전체 마스터 부정 변화")
             st.dataframe(
                 df_alerts.style.background_gradient(subset=["변화(%p)"], cmap="RdYlGn_r"),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
 
 # ═══════════════════════════════════════════════════════════════════════
-# 탭 4 (2축) / 탭 3 (1축): 콘텐츠 탐색
+# 탭 4 (2축): 세부 분석 — 서비스 이슈 클러스터 + 특이 패턴
+# ═══════════════════════════════════════════════════════════════════════
+
+if is_two_axis:
+    with tab_sub_themes:
+        st.subheader("세부 테마 분석")
+
+        # 서브 테마 데이터 로드
+        sub_themes_data = {}
+        for week in selected_weeks:
+            st_path = SUB_THEMES_DIR / f"{week}.json"
+            if st_path.exists():
+                with open(st_path, encoding="utf-8") as f:
+                    sub_themes_data[week] = json.load(f)
+
+        if not sub_themes_data:
+            st.info(
+                "세부 테마 데이터가 없습니다. "
+                "`python3 scripts/generate_two_axis_report.py`를 실행하면 자동 생성됩니다."
+            )
+        else:
+            # 서비스 이슈 클러스터
+            st.markdown("### 서비스 이슈 세부 분류")
+
+            for week, data in sorted(sub_themes_data.items(), reverse=True):
+                clusters = data.get("service_clusters", {})
+                if not clusters:
+                    st.caption(f"{week}: 서비스 이슈 클러스터 없음")
+                    continue
+
+                st.markdown(f"**{week}주차**")
+
+                # 클러스터 바 차트
+                cluster_df = pd.DataFrame([
+                    {"이슈 유형": info["label"], "건수": info["count"]}
+                    for info in clusters.values()
+                ]).sort_values("건수", ascending=True)
+
+                fig = px.bar(
+                    cluster_df,
+                    x="건수",
+                    y="이슈 유형",
+                    orientation="h",
+                    color_discrete_sequence=["#e74c3c"],
+                    height=max(200, len(cluster_df) * 35),
+                )
+                fig.update_layout(
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    yaxis_title="",
+                    xaxis_title="건수",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                # 클러스터별 상세 (expandable)
+                for cid, info in sorted(
+                    clusters.items(), key=lambda x: x[1]["count"], reverse=True
+                ):
+                    with st.expander(
+                        f"{info['label']} ({info['count']}건)", expanded=False
+                    ):
+                        # 감성 분포
+                        sent = info.get("sentiment_dist", {})
+                        cols = st.columns(3)
+                        for i, s in enumerate(["긍정", "부정", "중립"]):
+                            cols[i].metric(s, sent.get(s, 0))
+
+                        # 주요 마스터
+                        masters = info.get("top_masters", [])
+                        if masters:
+                            st.caption(
+                                "주요 마스터: "
+                                + ", ".join(f"{m} ({c}건)" for m, c in masters)
+                            )
+
+                        # 샘플
+                        for sample in info.get("samples", [])[:3]:
+                            st.markdown(f"> {sample[:200]}")
+
+            st.divider()
+
+            # 특이 패턴 요약
+            st.markdown("### 주요 부정 테마 요약")
+
+            any_patterns = False
+            for week, data in sorted(sub_themes_data.items(), reverse=True):
+                patterns = data.get("notable_patterns", [])
+                if not patterns:
+                    continue
+                any_patterns = True
+                st.markdown(f"**{week}주차**")
+                for p in patterns:
+                    topic = p["topic"]
+                    neg = p["negative_count"]
+                    total = p["total_in_topic"]
+                    ratio = p["negative_ratio"]
+                    masters = p.get("top_masters", [])
+
+                    st.markdown(
+                        f"**[{topic}]** 부정 {neg}건 / 전체 {total}건 ({ratio}%)"
+                    )
+                    if masters:
+                        st.caption(
+                            "주요 마스터: "
+                            + ", ".join(f"{m} ({c}건)" for m, c in masters)
+                        )
+                    st.markdown(p.get("summary", ""))
+                    st.divider()
+
+            if not any_patterns:
+                st.info("특이 부정 패턴 없음")
+
+# ═══════════════════════════════════════════════════════════════════════
+# 탭 5 (2축) / 탭 3 (1축): 콘텐츠 탐색
 # ═══════════════════════════════════════════════════════════════════════
 
 with tab_explorer:
@@ -548,7 +661,7 @@ with tab_explorer:
 
     st.dataframe(
         view_df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         height=600,
     )

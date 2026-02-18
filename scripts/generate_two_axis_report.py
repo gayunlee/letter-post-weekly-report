@@ -21,6 +21,7 @@ from src.reporter.two_axis_report_generator import TwoAxisReportGenerator
 from src.integrations.notion_client import NotionReportClient
 from src.integrations.slack_client import SlackNotifier
 from src.utils.two_axis_excel_exporter import export_two_axis_to_excel
+from src.classifier_v2.sub_theme_analyzer import SubThemeAnalyzer, save_sub_themes
 
 
 # 2축 데이터는 별도 디렉토리에 저장 (1축과 분리)
@@ -182,6 +183,29 @@ def main():
         print(f"  부정 급증 마스터: {', '.join(s['master'] for s in spikes)}")
     if drops:
         print(f"  부정 개선 마스터: {', '.join(d['master'] for d in drops)}")
+
+    # 3.5. 서브 테마 분석 (서비스 이슈 클러스터링 + 특이 패턴 요약)
+    print(f"\n[3.5단계] 서브 테마 분석")
+    sub_analyzer = SubThemeAnalyzer()
+    sub_themes = sub_analyzer.analyze(classified_letters, classified_posts, stats)
+
+    service_clusters = sub_themes.get("service_clusters", {})
+    notable_patterns = sub_themes.get("notable_patterns", [])
+
+    if service_clusters:
+        print(f"  서비스 이슈 클러스터: {len(service_clusters)}개")
+        for cid, info in service_clusters.items():
+            print(f"    [{info['label']}] {info['count']}건")
+    if notable_patterns:
+        for p in notable_patterns:
+            print(f"  [{p['topic']}] 부정 {p['negative_count']}건 — 패턴 요약 완료")
+
+    # 서브 테마 저장 (주간 증감 비교용)
+    sub_theme_path = save_sub_themes(sub_themes, target_start)
+    print(f"  서브 테마 저장: {sub_theme_path}")
+
+    # stats에 서브 테마 추가 (리포트 생성에 사용)
+    stats["sub_themes"] = sub_themes
 
     # 4. 리포트 생성
     print(f"\n[4단계] 2축 리포트 생성")
