@@ -152,6 +152,49 @@ class ChromaVectorStore:
 
         return similar_contents
 
+    def search_similar_batch(
+        self,
+        query_texts: List[str],
+        n_results: int = 5,
+        filter_metadata: Optional[Dict[str, Any]] = None,
+    ) -> List[List[Dict[str, Any]]]:
+        """
+        여러 쿼리를 한 번에 배치 검색 (임베딩을 배치로 처리하여 속도 향상)
+
+        Args:
+            query_texts: 검색 쿼리 텍스트 리스트
+            n_results: 각 쿼리당 반환할 결과 수
+            filter_metadata: 메타데이터 필터
+
+        Returns:
+            각 쿼리에 대한 유사 콘텐츠 리스트의 리스트
+        """
+        if not query_texts:
+            return []
+
+        results = self.collection.query(
+            query_texts=query_texts,
+            n_results=n_results,
+            where=filter_metadata,
+        )
+
+        batch_results = []
+        if results and results["ids"]:
+            for q_idx in range(len(results["ids"])):
+                similar_contents = []
+                for i in range(len(results["ids"][q_idx])):
+                    similar_contents.append({
+                        "id": results["ids"][q_idx][i],
+                        "text": results["documents"][q_idx][i],
+                        "metadata": results["metadatas"][q_idx][i] if results["metadatas"] else {},
+                        "distance": results["distances"][q_idx][i] if results.get("distances") else None,
+                    })
+                batch_results.append(similar_contents)
+        else:
+            batch_results = [[] for _ in query_texts]
+
+        return batch_results
+
     def get_by_category(
         self,
         category: str,

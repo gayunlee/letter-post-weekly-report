@@ -252,36 +252,108 @@ class VectorContentClassifier:
             "method": "vector",
         }
 
+    def _classify_from_neighbors(self, similar: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """k-NN 이웃 목록으로부터 분류 결과를 생성"""
+        if not similar:
+            return {"category": "미분류", "confidence": 0.0, "method": "none"}
+
+        vote_weights = Counter()
+        for match in similar:
+            category = match["metadata"].get("category", "미분류")
+            distance = match.get("distance", 1.0)
+            similarity = max(0.0, 1.0 - distance)
+            vote_weights[category] += similarity
+
+        if not vote_weights:
+            return {"category": "미분류", "confidence": 0.0, "method": "none"}
+
+        best_category = vote_weights.most_common(1)[0][0]
+        total_weight = sum(vote_weights.values())
+        confidence = vote_weights[best_category] / total_weight if total_weight > 0 else 0.0
+
+        return {
+            "category": best_category,
+            "confidence": round(confidence, 4),
+            "method": "vector",
+        }
+
     def classify_batch(
         self,
         contents: List[Dict[str, Any]],
         content_field: str = "message",
+        batch_size: int = 200,
     ) -> List[Dict[str, Any]]:
         """
-        여러 콘텐츠를 일괄 분류 (k-NN 투표 + 선택적 LLM fallback)
+        여러 콘텐츠를 배치 쿼리로 일괄 분류 (k-NN 투표 + 선택적 LLM fallback)
+
+        ChromaDB 배치 쿼리로 임베딩 생성을 묶어서 처리하여 속도를 대폭 향상.
 
         Args:
             contents: 분류할 콘텐츠 리스트
             content_field: 콘텐츠 텍스트가 포함된 필드명
+            batch_size: 한 번에 ChromaDB에 쿼리할 크기
 
         Returns:
             분류 결과가 추가된 콘텐츠 리스트
         """
-        results = []
+        results = [None] * len(contents)
         self.llm_fallback_count = 0
 
+        # 빈 콘텐츠와 유효 콘텐츠를 분리
+        valid_indices = []
+        valid_texts = []
         for i, item in enumerate(contents):
-            content_text = item.get(content_field, "")
+            text = item.get(content_field, "")
+            if not text or len(text.strip()) == 0:
+                result = item.copy()
+                result["classification"] = {
+                    "category": "내용 없음",
+                    "confidence": 0.0,
+                    "method": "empty",
+                }
+                results[i] = result
+            else:
+                valid_indices.append(i)
+                valid_texts.append(text[:500])
 
-            classification = self.classify_content(content_text)
+        # 배치 단위로 ChromaDB 쿼리
+        for batch_start in range(0, len(valid_texts), batch_size):
+            batch_end = min(batch_start + batch_size, len(valid_texts))
+            batch_texts = valid_texts[batch_start:batch_end]
+            batch_indices = valid_indices[batch_start:batch_end]
 
-            result = item.copy()
-            result["classification"] = classification
-            results.append(result)
+            # 배치 쿼리: 한 번의 호출로 여러 텍스트의 유사도 검색
+            batch_neighbors = self.store.search_similar_batch(
+                query_texts=batch_texts,
+                n_results=self.k_neighbors,
+            )
 
-            if (i + 1) % 100 == 0:
-                llm_info = f" (LLM: {self.llm_fallback_count}건)" if self.use_llm_fallback else ""
-                print(f"  진행: {i + 1}/{len(contents)} 완료{llm_info}")
+            for j, (idx, neighbors) in enumerate(zip(batch_indices, batch_neighbors)):
+                classification = self._classify_from_neighbors(neighbors)
+
+                # LLM fallback
+                if (self.use_llm_fallback and self.llm_classifier
+                        and classification["confidence"] < self.confidence_threshold):
+                    try:
+                        content_text = contents[idx].get(content_field, "")
+                        llm_result = self.llm_classifier.classify_content(content_text)
+                        self.llm_fallback_count += 1
+                        classification = {
+                            "category": llm_result.get("category", classification["category"]),
+                            "confidence": 0.8 if llm_result.get("confidence") == "높음" else 0.6,
+                            "method": "llm",
+                            "reason": llm_result.get("reason", ""),
+                        }
+                    except Exception:
+                        pass
+
+                result = contents[idx].copy()
+                result["classification"] = classification
+                results[idx] = result
+
+            processed = min(batch_end, len(valid_texts))
+            llm_info = f" (LLM: {self.llm_fallback_count}건)" if self.use_llm_fallback else ""
+            print(f"  진행: {processed}/{len(valid_texts)} 완료{llm_info}")
 
         if self.use_llm_fallback and self.llm_fallback_count > 0:
             print(f"  → LLM fallback 사용: {self.llm_fallback_count}건")

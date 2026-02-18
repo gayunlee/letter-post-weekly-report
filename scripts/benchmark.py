@@ -413,15 +413,15 @@ def print_comparison(current: Dict, previous: Dict):
         print(f"    시간: {prev_time:.3f}초 → {curr_time:.3f}초  ({arrow} {abs(time_pct):.1f}%)")
 
         # 정확도 비교
-        curr_acc = curr_clf.get("accuracy", {}).get("accuracy")
-        prev_acc = prev_clf.get("accuracy", {}).get("accuracy")
+        curr_acc = (curr_clf.get("accuracy") or {}).get("accuracy")
+        prev_acc = (prev_clf.get("accuracy") or {}).get("accuracy")
         if curr_acc is not None and prev_acc is not None:
             acc_diff = curr_acc - prev_acc
             arrow = "↑" if acc_diff > 0 else "↓" if acc_diff < 0 else "→"
             print(f"    정확도: {prev_acc:.4f} → {curr_acc:.4f}  ({arrow} {abs(acc_diff)*100:.1f}%p)")
 
-            curr_f1 = curr_clf.get("accuracy", {}).get("f1_weighted", 0)
-            prev_f1 = prev_clf.get("accuracy", {}).get("f1_weighted", 0)
+            curr_f1 = (curr_clf.get("accuracy") or {}).get("f1_weighted", 0)
+            prev_f1 = (prev_clf.get("accuracy") or {}).get("f1_weighted", 0)
             f1_diff = curr_f1 - prev_f1
             arrow = "↑" if f1_diff > 0 else "↓" if f1_diff < 0 else "→"
             print(f"    F1:     {prev_f1:.4f} → {curr_f1:.4f}  ({arrow} {abs(f1_diff)*100:.1f}%p)")
@@ -491,6 +491,9 @@ def main():
     # 데이터 파일 결정
     if args.data_file:
         data_file = Path(args.data_file)
+        if not data_file.exists():
+            # classified_data 폴더에서 검색
+            data_file = PROJECT_ROOT / "data" / "classified_data" / args.data_file
     else:
         # 가장 최근 파일 사용
         data_files = sorted((PROJECT_ROOT / "data" / "classified_data").glob("*.json"))
