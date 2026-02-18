@@ -1,12 +1,11 @@
 """ChromaDB를 사용한 벡터 스토어"""
-import os
 from typing import List, Dict, Any, Optional
 import chromadb
 from chromadb.config import Settings
-from anthropic import Anthropic
-from dotenv import load_dotenv
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
-load_dotenv()
+# 기본 임베딩 모델: 한국어 특화 sentence-transformers
+DEFAULT_EMBEDDING_MODEL = "jhgan/ko-sroberta-multitask"
 
 
 class ChromaVectorStore:
@@ -15,7 +14,8 @@ class ChromaVectorStore:
     def __init__(
         self,
         collection_name: str = "weekly_contents",
-        persist_directory: str = "./chroma_db"
+        persist_directory: str = "./chroma_db",
+        embedding_model: str = None,
     ):
         """
         ChromaVectorStore 초기화
@@ -23,9 +23,16 @@ class ChromaVectorStore:
         Args:
             collection_name: 컬렉션 이름
             persist_directory: 데이터 저장 디렉토리
+            embedding_model: sentence-transformers 모델명 (None이면 기본 한국어 모델 사용)
         """
         self.collection_name = collection_name
         self.persist_directory = persist_directory
+        self.embedding_model = embedding_model or DEFAULT_EMBEDDING_MODEL
+
+        # 임베딩 함수 초기화
+        self.embedding_fn = SentenceTransformerEmbeddingFunction(
+            model_name=self.embedding_model
+        )
 
         # ChromaDB 클라이언트 초기화
         self.client = chromadb.PersistentClient(
@@ -33,34 +40,12 @@ class ChromaVectorStore:
             settings=Settings(allow_reset=True)
         )
 
-        # 컬렉션 가져오기 또는 생성
+        # 컬렉션 가져오기 또는 생성 (cosine distance 사용)
         self.collection = self.client.get_or_create_collection(
             name=collection_name,
-            metadata={"description": "주간 콘텐츠 벡터 저장소"}
+            metadata={"hnsw:space": "cosine"},
+            embedding_function=self.embedding_fn,
         )
-
-        # Anthropic 클라이언트 (임베딩용)
-        self.api_key = os.getenv("ANTHROPIC_API_KEY")
-        if self.api_key:
-            self.anthropic_client = Anthropic(api_key=self.api_key)
-
-    def _generate_embedding(self, text: str) -> List[float]:
-        """
-        텍스트 임베딩 생성
-
-        참고: 현재 Anthropic은 직접 임베딩 API를 제공하지 않으므로,
-        간단한 방법으로 텍스트를 토큰화하여 임베딩을 생성합니다.
-        실제 프로덕션에서는 OpenAI embedding API나 다른 임베딩 모델을 사용하는 것이 좋습니다.
-
-        Args:
-            text: 임베딩할 텍스트
-
-        Returns:
-            임베딩 벡터
-        """
-        # ChromaDB의 기본 임베딩 함수 사용 (sentence-transformers)
-        # 별도의 임베딩 생성 없이 ChromaDB가 자동으로 처리하도록 함
-        return None
 
     def add_content(
         self,
@@ -226,5 +211,6 @@ class ChromaVectorStore:
         self.client.delete_collection(self.collection_name)
         self.collection = self.client.create_collection(
             name=self.collection_name,
-            metadata={"description": "주간 콘텐츠 벡터 저장소"}
+            metadata={"hnsw:space": "cosine"},
+            embedding_function=self.embedding_fn,
         )
