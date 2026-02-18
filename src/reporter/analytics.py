@@ -27,7 +27,8 @@ class WeeklyAnalytics:
         letters: List[Dict[str, Any]],
         posts: List[Dict[str, Any]],
         previous_letters: List[Dict[str, Any]] = None,
-        previous_posts: List[Dict[str, Any]] = None
+        previous_posts: List[Dict[str, Any]] = None,
+        prev_week_counts: Dict[str, Any] = None
     ) -> Dict[str, Any]:
         """
         주간 데이터 통계 분석
@@ -37,6 +38,7 @@ class WeeklyAnalytics:
             posts: 이번 주 게시글
             previous_letters: 전주 편지글 (선택)
             previous_posts: 전주 게시글 (선택)
+            prev_week_counts: 전주 카운트 데이터 (선택) - {"letters": {masterId: count}, "posts": {masterId: count}}
 
         Returns:
             통계 분석 결과
@@ -44,13 +46,15 @@ class WeeklyAnalytics:
         # 전체 통계
         total_stats = self._calculate_total_stats(
             letters, posts,
-            previous_letters, previous_posts
+            previous_letters, previous_posts,
+            prev_week_counts
         )
 
         # 마스터별 통계
         master_stats = self._calculate_master_stats(
             letters, posts,
-            previous_letters, previous_posts
+            previous_letters, previous_posts,
+            prev_week_counts
         )
 
         # 카테고리별 통계
@@ -71,7 +75,8 @@ class WeeklyAnalytics:
         letters: List[Dict[str, Any]],
         posts: List[Dict[str, Any]],
         previous_letters: List[Dict[str, Any]] = None,
-        previous_posts: List[Dict[str, Any]] = None
+        previous_posts: List[Dict[str, Any]] = None,
+        prev_week_counts: Dict[str, Any] = None
     ) -> Dict[str, Any]:
         """
         전체 통계 계산
@@ -89,12 +94,22 @@ class WeeklyAnalytics:
             "total": len(letters) + len(posts)
         }
 
-        last_week = {
-            "letters": len(previous_letters) if previous_letters else 0,
-            "posts": len(previous_posts) if previous_posts else 0,
-            "total": (len(previous_letters) if previous_letters else 0) +
-                     (len(previous_posts) if previous_posts else 0)
-        }
+        # prev_week_counts가 있으면 우선 사용
+        if prev_week_counts:
+            prev_letters_total = sum(prev_week_counts.get("letters", {}).values())
+            prev_posts_total = sum(prev_week_counts.get("posts", {}).values())
+            last_week = {
+                "letters": prev_letters_total,
+                "posts": prev_posts_total,
+                "total": prev_letters_total + prev_posts_total
+            }
+        else:
+            last_week = {
+                "letters": len(previous_letters) if previous_letters else 0,
+                "posts": len(previous_posts) if previous_posts else 0,
+                "total": (len(previous_letters) if previous_letters else 0) +
+                         (len(previous_posts) if previous_posts else 0)
+            }
 
         change = {
             "letters": this_week["letters"] - last_week["letters"],
@@ -113,7 +128,8 @@ class WeeklyAnalytics:
         letters: List[Dict[str, Any]],
         posts: List[Dict[str, Any]],
         previous_letters: List[Dict[str, Any]] = None,
-        previous_posts: List[Dict[str, Any]] = None
+        previous_posts: List[Dict[str, Any]] = None,
+        prev_week_counts: Dict[str, Any] = None
     ) -> Dict[str, Dict[str, Any]]:
         """
         마스터별 통계 계산 (동일 마스터의 여러 클럽 합산)
@@ -196,29 +212,59 @@ class WeeklyAnalytics:
             })
 
         # 전주 데이터 집계
-        if previous_letters:
-            for letter in previous_letters:
+        # prev_week_counts 사용 (masterId -> masterName 매핑 필요)
+        if prev_week_counts:
+            # masterId -> masterName 매핑 생성
+            master_id_to_name = {}
+            for letter in letters:
+                master_id = letter.get("masterId", "")
                 master_name = letter.get("masterName", "Unknown")
-                master_group = self._get_master_group_name(master_name)
-                master_stats[master_group]["last_week"]["letters"] += 1
-                master_stats[master_group]["last_week"]["total"] += 1
-
-                # 클럽명 수집
-                club_name = letter.get("masterClubName", "")
-                if club_name:
-                    master_stats[master_group]["club_names"].add(club_name)
-
-        if previous_posts:
-            for post in previous_posts:
+                if master_id:
+                    master_id_to_name[master_id] = self._get_master_group_name(master_name)
+            for post in posts:
+                master_id = post.get("postBoardId", "") or post.get("masterId", "")
                 master_name = post.get("masterName", "Unknown")
-                master_group = self._get_master_group_name(master_name)
-                master_stats[master_group]["last_week"]["posts"] += 1
-                master_stats[master_group]["last_week"]["total"] += 1
+                if master_id:
+                    master_id_to_name[master_id] = self._get_master_group_name(master_name)
 
-                # 클럽명 수집
-                club_name = post.get("masterClubName", "")
-                if club_name:
-                    master_stats[master_group]["club_names"].add(club_name)
+            # 전주 편지 카운트 적용
+            for master_id, count in prev_week_counts.get("letters", {}).items():
+                master_group = master_id_to_name.get(master_id)
+                if master_group:
+                    master_stats[master_group]["last_week"]["letters"] += count
+                    master_stats[master_group]["last_week"]["total"] += count
+
+            # 전주 게시글 카운트 적용
+            for master_id, count in prev_week_counts.get("posts", {}).items():
+                master_group = master_id_to_name.get(master_id)
+                if master_group:
+                    master_stats[master_group]["last_week"]["posts"] += count
+                    master_stats[master_group]["last_week"]["total"] += count
+
+        elif previous_letters or previous_posts:
+            if previous_letters:
+                for letter in previous_letters:
+                    master_name = letter.get("masterName", "Unknown")
+                    master_group = self._get_master_group_name(master_name)
+                    master_stats[master_group]["last_week"]["letters"] += 1
+                    master_stats[master_group]["last_week"]["total"] += 1
+
+                    # 클럽명 수집
+                    club_name = letter.get("masterClubName", "")
+                    if club_name:
+                        master_stats[master_group]["club_names"].add(club_name)
+
+            if previous_posts:
+                for post in previous_posts:
+                    master_name = post.get("masterName", "Unknown")
+                    master_group = self._get_master_group_name(master_name)
+                    master_stats[master_group]["last_week"]["posts"] += 1
+                    master_stats[master_group]["last_week"]["total"] += 1
+
+                    # 클럽명 수집
+                    club_name = post.get("masterClubName", "")
+                    if club_name:
+                        master_stats[master_group]["club_names"].add(club_name)
 
         # 증감 계산
         for master_group in master_stats:
@@ -262,27 +308,31 @@ class WeeklyAnalytics:
         posts: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """
-        서비스 피드백 추출
+        서비스 관련 피드백 추출 (서비스 피드백, 서비스 불편사항, 서비스 제보/건의)
 
         Returns:
-            [{"content": str, "reason": str, "masterId": str}, ...]
+            [{"content": str, "reason": str, "masterId": str, "subcategory": str}, ...]
         """
+        service_categories = ["서비스 피드백", "서비스 불편사항", "서비스 제보/건의"]
         feedbacks = []
 
         for letter in letters:
             classification = letter.get("classification", {})
-            if classification.get("category") == "서비스 피드백":
+            category = classification.get("category", "")
+            if category in service_categories:
                 feedbacks.append({
                     "type": "letter",
                     "content": clean_text(letter.get("message", ""), 200),
                     "reason": classification.get("reason", ""),
                     "masterId": letter.get("masterId", "unknown"),
-                    "createdAt": letter.get("createdAt", "")
+                    "createdAt": letter.get("createdAt", ""),
+                    "subcategory": category
                 })
 
         for post in posts:
             classification = post.get("classification", {})
-            if classification.get("category") == "서비스 피드백":
+            category = classification.get("category", "")
+            if category in service_categories:
                 content = post.get("textBody") or post.get("body", "")
                 feedbacks.append({
                     "type": "post",
@@ -290,7 +340,8 @@ class WeeklyAnalytics:
                     "content": clean_text(content, 200),
                     "reason": classification.get("reason", ""),
                     "masterId": post.get("postBoardId", "unknown"),
-                    "createdAt": post.get("createdAt", "")
+                    "createdAt": post.get("createdAt", ""),
+                    "subcategory": category
                 })
 
         return feedbacks
