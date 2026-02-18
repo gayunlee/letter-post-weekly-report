@@ -28,7 +28,14 @@ accountKey.json
 
 # Vector DB
 chroma_db/
+chroma_db_*/
 *.db
+
+# Models (large binary files)
+models/
+
+# Benchmarks (local measurement results)
+benchmarks/
 
 # Data
 data/
