@@ -1,0 +1,121 @@
+{
+  "timestamp": "2026-02-18T17:04:33.936452",
+  "note": "한국어 임베딩 모델로 교체 (jhgan/ko-sroberta-multitask)",
+  "data": {
+    "source": "2026-01-05.json",
+    "total_items": 1981,
+    "letters": 848,
+    "posts": 1133,
+    "ground_truth_file": "refined_labeled.json",
+    "ground_truth_matched": 437
+  },
+  "classifiers": {
+    "vector": {
+      "name": "vector",
+      "category_scheme": "old",
+      "elapsed_seconds": 61.445,
+      "time_per_item_ms": 31.017,
+      "total_items": 1981,
+      "llm_fallback_calls": 0,
+      "category_distribution": {
+        "정보성 글": 230,
+        "일상·공감": 496,
+        "감사·후기": 929,
+        "불편사항": 174,
+        "질문·토론": 100,
+        "서비스 피드백": 52
+      },
+      "confidence_stats": {
+        "mean": 0.001,
+        "median": 0.0,
+        "min": 0.0,
+        "p25": 0.0,
+        "p75": 0.0
+      },
+      "accuracy": {
+        "accuracy": 0.4188,
+        "f1_weighted": 0.4358,
+        "per_category": {
+          "긍정 피드백": {
+            "precision": 0.2414,
+            "recall": 0.7538,
+            "f1": 0.3657,
+            "support": 65
+          },
+          "부정 피드백": {
+            "precision": 0.2333,
+            "recall": 0.5,
+            "f1": 0.3182,
+            "support": 28
+          },
+          "질문/문의": {
+            "precision": 0.6957,
+            "recall": 0.2105,
+            "f1": 0.3232,
+            "support": 76
+          },
+          "정보 공유": {
+            "precision": 0.6,
+            "recall": 0.3797,
+            "f1": 0.4651,
+            "support": 79
+          },
+          "일상 소통": {
+            "precision": 0.7327,
+            "recall": 0.3915,
+            "f1": 0.5103,
+            "support": 189
+          }
+        },
+        "confusion_matrix": {
+          "labels": [
+            "긍정 피드백",
+            "부정 피드백",
+            "질문/문의",
+            "정보 공유",
+            "일상 소통"
+          ],
+          "matrix": [
+            [
+              49,
+              2,
+              1,
+              3,
+              10
+            ],
+            [
+              3,
+              14,
+              1,
+              4,
+              6
+            ],
+            [
+              15,
+              28,
+              16,
+              13,
+              4
+            ],
+            [
+              23,
+              14,
+              5,
+              30,
+              7
+            ],
+            [
+              113,
+              2,
+              0,
+              0,
+              74
+            ]
+          ]
+        },
+        "evaluated_items": 437
+      }
+    }
+  },
+  "report_generation": null
+}
