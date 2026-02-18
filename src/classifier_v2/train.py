@@ -17,13 +17,36 @@ from transformers import (
     EarlyStoppingCallback
 )
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from sklearn.utils.class_weight import compute_class_weight
 import numpy as np
 
 from .prepare_data import CATEGORY_TO_ID, ID_TO_CATEGORY
 
 
+class WeightedTrainer(Trainer):
+    """클래스 가중치를 적용하는 커스텀 Trainer"""
+
+    def __init__(self, class_weights=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.class_weights = class_weights
+
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        labels = inputs.pop("labels")
+        outputs = model(**inputs)
+        logits = outputs.logits
+
+        if self.class_weights is not None:
+            weight = self.class_weights.to(logits.device)
+            loss_fn = torch.nn.CrossEntropyLoss(weight=weight)
+        else:
+            loss_fn = torch.nn.CrossEntropyLoss()
+
+        loss = loss_fn(logits, labels)
+        return (loss, outputs) if return_outputs else loss
+
+
 # 기본 설정
-MODEL_NAME = "beomi/kcbert-base"
+MODEL_NAME = "klue/roberta-base"  # 더 좋은 성능의 모델
 MAX_LENGTH = 256
 NUM_LABELS = len(CATEGORY_TO_ID)
 
@@ -132,6 +155,18 @@ def train(
     val_dataset = VOCDataset(val_data, tokenizer)
     test_dataset = VOCDataset(test_data, tokenizer)
 
+    # 클래스 가중치 계산 (불균형 해결)
+    train_labels = [item["label"] for item in train_data]
+    class_weights = compute_class_weight(
+        class_weight="balanced",
+        classes=np.unique(train_labels),
+        y=train_labels
+    )
+    class_weights = torch.tensor(class_weights, dtype=torch.float32)
+    print(f"\n클래스 가중치:")
+    for i, w in enumerate(class_weights):
+        print(f"  {ID_TO_CATEGORY[i]}: {w:.3f}")
+
     # 훈련 설정
     training_args = TrainingArguments(
         output_dir=str(output_dir / "checkpoints"),
@@ -154,14 +189,15 @@ def train(
         dataloader_num_workers=0,  # MPS 호환성
     )
 
-    # Trainer 생성
-    trainer = Trainer(
+    # Trainer 생성 (클래스 가중치 적용)
+    trainer = WeightedTrainer(
+        class_weights=class_weights,
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         compute_metrics=compute_metrics,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=2)]
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
     )
 
     # 훈련

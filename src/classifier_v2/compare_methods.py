@@ -1,12 +1,20 @@
 """분류 방식 비교 스크립트
 
 기존 방식(벡터 유사도 + LLM fallback) vs 새 방식(Fine-tuned KcBERT)을 비교합니다.
+
+사용법:
+    # Ground truth 없이 일치율만 비교
+    python -m src.classifier_v2.compare_methods
+
+    # Ground truth 대비 정확도 평가 (라벨링 데이터 사용)
+    python -m src.classifier_v2.compare_methods --with-ground-truth
 """
 import json
 import time
+import argparse
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from collections import Counter
 
 # 기존 분류기
@@ -15,6 +23,24 @@ from ..classifier.vector_classifier import VectorContentClassifier
 # 새 분류기
 from .finetuned_classifier import FinetunedClassifier
 
+# 새 카테고리 정의
+NEW_CATEGORIES = [
+    "긍정 피드백",
+    "부정 피드백",
+    "질문/문의",
+    "정보 공유",
+    "일상 소통",
+]
+
+# 기존 → 새 카테고리 매핑
+OLD_TO_NEW_MAPPING = {
+    "감사·후기": "긍정 피드백",
+    "질문·토론": "질문/문의",
+    "정보성 글": "정보 공유",
+    "서비스 피드백": "질문/문의",
+    "불편사항": "부정 피드백",
+    "일상·공감": "일상 소통",
+}
 
 # Claude API 비용 (Sonnet 기준, 2024)
 CLAUDE_INPUT_COST_PER_1K = 0.003  # $0.003/1K input tokens
@@ -24,27 +50,42 @@ AVG_OUTPUT_TOKENS_PER_CALL = 100  # 분류 결과
 
 
 def load_raw_data(data_file: Path) -> tuple:
-    """원본 데이터 로드 (분류 결과 제외)"""
+    """원본 데이터 로드 (기존 분류 결과 유지)"""
     with open(data_file, encoding="utf-8") as f:
         data = json.load(f)
 
     letters = data.get("letters", [])
     posts = data.get("posts", [])
 
-    # 분류 결과 저장 (ground truth로 사용)
+    # 기존 분류 결과를 그대로 유지 (재분류 안함)
+    return letters, posts
+
+
+def load_ground_truth(labeling_file: Path) -> Dict[str, str]:
+    """라벨링 데이터에서 Ground Truth 로드
+
+    Returns:
+        Dict[id, category]: ID별 정답 카테고리
+    """
+    if not labeling_file.exists():
+        return {}
+
+    with open(labeling_file, encoding="utf-8") as f:
+        data = json.load(f)
+
     ground_truth = {}
-    for item in letters + posts:
-        item_id = item.get("_id")
-        if item_id and "classification" in item:
-            ground_truth[item_id] = item["classification"]["category"]
+    for item in data:
+        item_id = item.get("id")
+        label = item.get("new_label")
+        if item_id and label:
+            ground_truth[item_id] = label
 
-    # 분류 결과 제거 (재분류를 위해)
-    for item in letters:
-        item.pop("classification", None)
-    for item in posts:
-        item.pop("classification", None)
+    return ground_truth
 
-    return letters, posts, ground_truth
+
+def map_to_new_category(old_category: str) -> str:
+    """기존 카테고리를 새 카테고리로 매핑"""
+    return OLD_TO_NEW_MAPPING.get(old_category, old_category)
 
 
 def run_vector_classifier(
@@ -271,7 +312,75 @@ def generate_report(
     print(f"\n리포트 저장: {output_path}")
 
 
+def generate_accuracy_report(
+    accuracy_results: Dict[str, Dict],
+    output_path: Path
+):
+    """Ground Truth 대비 정확도 리포트 생성"""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    report = f"""# Ground Truth 대비 정확도 리포트
+
+생성일시: {now}
+
+## 1. 전체 정확도
+
+| 분류기 | 정확도 | 정답 | 전체 |
+|--------|--------|------|------|
+"""
+    for name, result in accuracy_results.items():
+        acc = result["accuracy"] * 100
+        report += f"| {name} | {acc:.1f}% | {result['correct']} | {result['total']} |\n"
+
+    report += """
+## 2. 카테고리별 정확도
+
+| 카테고리 | 기존 방식 | Fine-tuned |
+|----------|----------|------------|
+"""
+    # 모든 카테고리 수집
+    all_cats = set()
+    for result in accuracy_results.values():
+        all_cats.update(result.get("category_accuracy", {}).keys())
+
+    for cat in sorted(all_cats):
+        vector_acc = accuracy_results.get("기존 방식", {}).get("category_accuracy", {}).get(cat, 0) * 100
+        finetuned_acc = accuracy_results.get("Fine-tuned", {}).get("category_accuracy", {}).get(cat, 0) * 100
+        report += f"| {cat} | {vector_acc:.1f}% | {finetuned_acc:.1f}% |\n"
+
+    report += """
+## 3. 권장사항
+
+"""
+    best_method = max(accuracy_results.items(), key=lambda x: x[1]["accuracy"])
+    report += f"- **최고 정확도**: {best_method[0]} ({best_method[1]['accuracy']*100:.1f}%)\n"
+
+    if best_method[1]["accuracy"] >= 0.7:
+        report += "- 목표 정확도 70% 달성\n"
+    else:
+        report += "- 목표 정확도 70% 미달, 추가 라벨링 및 재훈련 필요\n"
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(report)
+
+    print(f"\n정확도 리포트 저장: {output_path}")
+
+
 def main():
+    parser = argparse.ArgumentParser(description="분류 방식 비교")
+    parser.add_argument(
+        "--with-ground-truth",
+        action="store_true",
+        help="라벨링 데이터를 Ground Truth로 사용하여 정확도 평가"
+    )
+    parser.add_argument(
+        "--labeling-file",
+        type=str,
+        default=None,
+        help="라벨링 데이터 파일 경로"
+    )
+    args = parser.parse_args()
+
     project_root = Path(__file__).parent.parent.parent
 
     # 가장 최근 데이터 파일
@@ -282,9 +391,17 @@ def main():
     print("분류 방식 비교")
     print("=" * 60)
 
+    # Ground Truth 로드 (선택적)
+    ground_truth = {}
+    if args.with_ground_truth:
+        labeling_file = Path(args.labeling_file) if args.labeling_file else project_root / "data" / "labeling" / "labeling_data.json"
+        print(f"\nGround Truth 로드: {labeling_file}")
+        ground_truth = load_ground_truth(labeling_file)
+        print(f"  라벨링된 항목: {len(ground_truth)}건")
+
     # 데이터 로드
     print(f"\n데이터 로드: {data_file}")
-    letters, posts, ground_truth = load_raw_data(data_file)
+    letters, posts = load_raw_data(data_file)
     total_items = len(letters) + len(posts)
     print(f"  편지: {len(letters)}건, 게시글: {len(posts)}건, 총: {total_items}건")
 
@@ -334,6 +451,37 @@ def main():
     # 리포트 생성
     output_path.parent.mkdir(parents=True, exist_ok=True)
     generate_report(vector_results, finetuned_results, agreement, output_path)
+
+    # Ground Truth 대비 정확도 평가
+    if ground_truth:
+        print("\nGround Truth 대비 정확도 계산 중...")
+
+        # 기존 방식 정확도 (새 카테고리로 매핑 후 비교)
+        vector_mapped = []
+        for item in v_letters + v_posts:
+            mapped_item = item.copy()
+            old_cat = item.get("classification", {}).get("category", "")
+            mapped_item["classification"] = {
+                "category": map_to_new_category(old_cat)
+            }
+            vector_mapped.append(mapped_item)
+
+        vector_accuracy = calculate_accuracy(vector_mapped, ground_truth)
+        print(f"  기존 방식 정확도: {vector_accuracy['accuracy']*100:.1f}%")
+
+        # Fine-tuned 정확도
+        finetuned_accuracy = calculate_accuracy(f_letters + f_posts, ground_truth)
+        print(f"  Fine-tuned 정확도: {finetuned_accuracy['accuracy']*100:.1f}%")
+
+        # 정확도 리포트 생성
+        accuracy_output = project_root / "reports" / "accuracy_report.md"
+        generate_accuracy_report(
+            {
+                "기존 방식": vector_accuracy,
+                "Fine-tuned": finetuned_accuracy
+            },
+            accuracy_output
+        )
 
     print("\n완료!")
 
