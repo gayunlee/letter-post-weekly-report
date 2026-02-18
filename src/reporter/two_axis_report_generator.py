@@ -467,10 +467,47 @@ markdown 불릿 포인트 형식으로 작성해주세요."""
     # ── 2. 서비스 이슈 모아보기 ───────────────────────────────────────
 
     def _generate_service_issues_section(self, stats: Dict[str, Any]) -> str:
+        """서비스 이슈 모아보기 — 클러스터 기반 그룹핑"""
+        sub_themes = stats.get("sub_themes", {})
+        clusters = sub_themes.get("service_clusters", {}) if sub_themes else {}
         issues = stats.get("service_issues", [])
-        if not issues:
+
+        if not clusters and not issues:
             return "# 2. 서비스 이슈 모아보기\n\n서비스 관련 부정 피드백이 없습니다.\n\n"
 
+        # 클러스터 데이터가 있으면 클러스터 기반으로 표시
+        if clusters:
+            sorted_clusters = sorted(
+                clusters.items(),
+                key=lambda x: x[1]["count"],
+                reverse=True,
+            )
+            total_items = sum(c["count"] for c in clusters.values())
+            section = f"# 2. 서비스 이슈 모아보기\n\n서비스 이슈 총 {total_items}건 — {len(clusters)}개 유형\n\n"
+
+            # 요약 테이블
+            section += "| # | 이슈 유형 | 건수 | 주요 마스터 |\n"
+            section += "| - | --------- | ---- | ----------- |\n"
+            for i, (cid, info) in enumerate(sorted_clusters, 1):
+                masters_str = ", ".join(
+                    f"{m}({c})" for m, c in info.get("top_masters", [])[:2]
+                )
+                section += f"| {i} | {info['label']} | {info['count']} | {masters_str} |\n"
+            section += "\n"
+
+            # 3건 이상인 클러스터만 상세 표시
+            for cid, info in sorted_clusters:
+                if info["count"] < 3:
+                    continue
+                section += f"**{info['label']}** ({info['count']}건)\n\n"
+                for sample in info.get("samples", [])[:2]:
+                    clean = sample[:150].replace("\n", " ")
+                    section += f'> _"{clean}"_\n\n'
+
+            section += "---\n\n"
+            return section
+
+        # 클러스터 없으면 기존 방식 (건건이 나열)
         section = f"# 2. 서비스 이슈 모아보기\n\n서비스 이슈(부정) 총 {len(issues)}건\n\n"
         for i, issue in enumerate(issues, 1):
             master = issue.get("master", "Unknown")
@@ -488,60 +525,25 @@ markdown 불릿 포인트 형식으로 작성해주세요."""
     # ── 3. 서브 테마 분석 ─────────────────────────────────────────────
 
     def _generate_sub_theme_section(self, stats: Dict[str, Any]) -> str:
-        """서비스 이슈 클러스터 + 특이 패턴 요약 섹션"""
+        """주요 부정 테마 요약 섹션 (서비스 이슈 제외 — 이미 섹션 2에서 클러스터 기반 표시)"""
         sub_themes = stats.get("sub_themes", {})
         if not sub_themes:
             return ""
 
-        section = ""
-        clusters = sub_themes.get("service_clusters", {})
         patterns = sub_themes.get("notable_patterns", [])
-
-        if not clusters and not patterns:
+        if not patterns:
             return ""
 
-        section += "# 3. 세부 테마 분석\n\n"
-
-        # 서비스 이슈 클러스터
-        if clusters:
-            total_items = sum(c["count"] for c in clusters.values())
-            section += f"### 서비스 이슈 세부 분류 (총 {total_items}건)\n\n"
-            section += "| # | 이슈 유형 | 건수 | 주요 마스터 |\n"
-            section += "| - | --------- | ---- | ----------- |\n"
-
-            sorted_clusters = sorted(
-                clusters.items(),
-                key=lambda x: x[1]["count"],
-                reverse=True,
+        section = "# 3. 주요 부정 테마 요약\n\n"
+        for p in patterns:
+            masters_str = ", ".join(f"{m}({c})" for m, c in p.get("top_masters", [])[:3])
+            section += (
+                f"**[{p['topic']}]** 부정 {p['negative_count']}건 "
+                f"/ 전체 {p['total_in_topic']}건 ({p['negative_ratio']}%)\n"
             )
-            for i, (cid, info) in enumerate(sorted_clusters, 1):
-                masters_str = ", ".join(
-                    f"{m}({c})" for m, c in info.get("top_masters", [])[:2]
-                )
-                section += f"| {i} | {info['label']} | {info['count']} | {masters_str} |\n"
-
-            section += "\n"
-
-            # 상위 클러스터 샘플
-            for cid, info in sorted_clusters[:5]:
-                if info["count"] < 2:
-                    continue
-                section += f"**{info['label']}** ({info['count']}건)\n"
-                for sample in info.get("samples", [])[:2]:
-                    section += f'> _"{sample[:120]}"_\n\n'
-
-        # 특이 패턴 요약
-        if patterns:
-            section += "### 주요 부정 테마 요약\n\n"
-            for p in patterns:
-                masters_str = ", ".join(f"{m}({c})" for m, c in p.get("top_masters", [])[:3])
-                section += (
-                    f"**[{p['topic']}]** 부정 {p['negative_count']}건 "
-                    f"/ 전체 {p['total_in_topic']}건 ({p['negative_ratio']}%)\n"
-                )
-                if masters_str:
-                    section += f"주요 마스터: {masters_str}\n\n"
-                section += f"{p['summary']}\n\n"
+            if masters_str:
+                section += f"주요 마스터: {masters_str}\n\n"
+            section += f"{p['summary']}\n\n"
 
         section += "---\n\n"
         return section

@@ -177,7 +177,9 @@ class SubThemeAnalyzer:
                 temperature=0.1,
                 messages=[{"role": "user", "content": prompt}],
             )
-            return response.choices[0].message.content.strip().strip('"\'')
+            raw = response.choices[0].message.content.strip().strip('"\'')
+            # 줄바꿈이 포함된 경우 첫 줄만 사용
+            return raw.split("\n")[0].strip()
         except Exception:
             return "서비스 이슈"
 
