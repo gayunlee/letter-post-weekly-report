@@ -1,20 +1,31 @@
-# Delta for VOC Classification
+# Delta for VOC Classification — Phase 1
 
 ## ADDED Requirements
 
-### Requirement: 검수 대상 추출
+### Requirement: 검수 라우팅 (ReviewRouter)
 
-confidence score 기반으로 주간 분류 데이터에서 검수 대상을 자동 추출한다.
+4축 분류의 confidence score 기반으로 auto/conditional/review 3단계로 라우팅한다.
 
-#### Scenario: Low-confidence 항목 전량 추출
-- GIVEN 주간 분류 완료 데이터
-- WHEN confidence < 0.7인 항목
-- THEN 해당 항목은 검수 대상으로 전량 추출됨
+#### Scenario: Auto 수용
+- GIVEN 분류 완료 항목의 min(topic_conf, sentiment_conf, intent_conf) ≥ 0.85
+- WHEN 검수 라우팅 실행
+- THEN 해당 항목은 자동 수용 (검수 불필요)
 
-#### Scenario: High-confidence 랜덤 샘플
-- GIVEN 주간 분류 완료 데이터
-- WHEN confidence >= 0.7인 항목 중 랜덤 20%
-- THEN 해당 항목도 검수 대상으로 추출됨 (기준선 편향 방지)
+#### Scenario: Conditional 수용
+- GIVEN 분류 완료 항목의 min confidence가 0.60 ~ 0.85
+- WHEN 전주 분포와 비교하여 이상 없음
+- THEN 해당 항목은 조건부 수용
+
+#### Scenario: Review 대상
+- GIVEN 분류 완료 항목의 min confidence < 0.60
+- WHEN 검수 라우팅 실행
+- THEN 해당 항목은 검수 대상으로 추출됨
+
+---
+
+### Requirement: 검수 대상 CSV 추출
+
+검수 대상 항목을 비개발 팀이 편집할 수 있는 CSV로 내보낸다.
 
 #### Scenario: CSV 내보내기
 - GIVEN 검수 대상이 추출됨
@@ -37,4 +48,4 @@ confidence score 기반으로 주간 분류 데이터에서 검수 대상을 자
 #### Scenario: 정확도 리포트
 - GIVEN 정확도 데이터
 - WHEN 리포트 생성
-- THEN Topic / Sentiment / Category Tag 각각의 accuracy + confusion matrix 출력
+- THEN Topic / Sentiment / Intent / Category Tag 각각의 accuracy + confusion matrix 출력

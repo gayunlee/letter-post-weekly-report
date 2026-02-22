@@ -1,9 +1,9 @@
-# Design: Phase 1 — 사람 검수 기반 구축
+# Design: Phase 1 — Confidence 기반 검수 라우팅
 
 ## Technical Approach
 
-기존 파이프라인의 분류 결과 JSON에 검수 메타데이터를 추가하고,
-별도 검수 워크플로우(추출 → 검수 → 수집 → 정확도 측정)를 구축한다.
+4축 분류 결과의 confidence score를 기반으로 auto/conditional/review 3단계 라우팅을 구축한다.
+검수 대상은 CSV로 내보내고, 검수 결과는 `data/review/`에 독립 저장한다.
 
 ## Architecture Decisions
 
@@ -13,11 +13,11 @@
 - JSON보다 진입 장벽이 낮음
 - 검수 결과 수집 시 CSV → JSON 변환은 간단
 
-### Decision: 검수 기준은 confidence score 기반
+### Decision: 3단계 라우팅 (auto / conditional / review)
 이유:
-- 2축 분류는 이미 topic_confidence, sentiment_confidence 제공
-- detail_tags는 LLM 응답이므로 별도 confidence 추정 필요 (또는 검증 모델)
-- low-confidence 전량 + high-confidence 랜덤 20% → 편향 없는 기준선 측정
+- 단순 2단계(pass/review)보다 검수 효율이 높음
+- conditional 구간에서 전주 분포 비교로 이상 없는 건 자동 수용 가능
+- 검수 비율을 단계적으로 줄여갈 수 있는 구조
 
 ### Decision: 검수 데이터는 `data/review/`에 독립 저장
 이유:
@@ -25,10 +25,21 @@
 - 검수 전/후 비교가 항상 가능
 - Phase 2 재학습 시 학습 데이터로 직접 사용
 
+### Decision: confidence는 4축 중 최저값 기준
+이유:
+- Topic confidence만 보면 Sentiment/Intent 오분류를 놓침
+- min(topic_conf, sentiment_conf, intent_conf)로 보수적 판단
+- Phase 2에서 축별 가중치 최적화 가능
+
 ## Data Flow
 
 ```
 data/classified_data_two_axis/{date}.json
+    ↓ ReviewRouter.route()
+    ├─ auto (≥0.85)     → 자동 수용
+    ├─ conditional (0.60~0.85) → 전주 분포 비교 → 수용 or 검수
+    └─ review (<0.60)    → 검수 대상
+    ↓
     ↓ export_for_review.py
 data/review/export_{date}.csv          ← 검수 대상
     ↓ (사람 검수: Google Sheet 등)
@@ -39,7 +50,8 @@ data/review/accuracy_{date}.json       ← 정확도 리포트
 
 ## File Changes
 
-- `scripts/export_for_review.py` (new) — 검수 대상 추출
+- `src/classifier_v3/review_router.py` (new) — confidence 기반 3단계 라우팅
+- `src/storage/review_store.py` (new) — 검수 데이터 관리 (내보내기/수집/통계)
+- `scripts/export_for_review.py` (new) — 검수 대상 CSV 추출
 - `scripts/import_review_results.py` (new) — 검수 결과 수집 + 정확도 리포트
-- `src/classifier_v2/confidence.py` (new) — detail_tags confidence 추정
-- `scripts/generate_two_axis_report.py` (modified) — 정확도 섹션 추가 (선택)
+- `scripts/generate_two_axis_report.py` (modified) — 검수 라우팅 통합

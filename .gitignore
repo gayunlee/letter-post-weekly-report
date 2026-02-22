@@ -49,6 +49,7 @@ reports/
 !CLAUDE.md
 !requirements.md
 !example.md
+!openspec/**/*.md
 
 # Environment
 .env
