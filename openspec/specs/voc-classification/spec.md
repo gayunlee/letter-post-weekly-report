@@ -4,13 +4,20 @@
 
 금융 콘텐츠 플랫폼(오피셜클럽)의 편지글/게시글/채널톡 VOC 데이터를 다층 분류하여, 주간 인사이트 리포트 자동 생성 및 다른 팀의 자유 질의 응답을 가능하게 하는 시스템.
 
+## 설계 원칙
+
+- **자유도 우선**: 특정 부서의 뷰를 하드코딩하지 않고, 풍부한 분류 필드를 제공하여 누구든 자기 목적에 맞게 조합·쿼리할 수 있게 한다.
+- **분류 축은 최소한으로**: Topic(주제) × Sentiment(감성) 2축 + detail_tags(카테고리 태그 28종 + 자유 태그 + 요약)로 충분한 분석 자유도를 확보한다.
+- **Intent(의도)는 부수 데이터**: detail_tags 추출 시 동일 LLM 호출에서 함께 추출. 별도 축이 아닌 쿼리용 보조 필드.
+- **정확도 향상은 검수 → 재학습 사이클로**: 모델 추가가 아닌 기존 모델의 정확도를 높이는 방향.
+
 ## Requirements
 
-### Requirement: 4축 분류 (Topic × Sentiment × Intent × Urgency)
+### Requirement: 2축 분류 (Topic × Sentiment)
 
-편지글/게시글을 4개 축으로 분류한다. Topic/Sentiment는 파인튜닝 KcBERT, Intent는 LLM(Haiku), Urgency는 규칙 기반.
+파인튜닝된 KcBERT 모델로 편지글/게시글을 Topic 4개 × Sentiment 3개로 분류한다.
 
-#### 축1: Topic (파인튜닝 — 기구현)
+#### Topic
 | 값 | 설명 |
 |----|------|
 | 콘텐츠 반응 | 마스터 콘텐츠(강의, 리포트, 방송)에 대한 반응 |
@@ -18,34 +25,20 @@
 | 서비스 이슈 | 플랫폼/앱 기능, 결제, 배송, 구독 등 |
 | 커뮤니티 소통 | 인사, 안부, 축하, 일상 공유 |
 
-#### 축2: Sentiment (파인튜닝 — 기구현)
+#### Sentiment
 | 값 | 설명 |
 |----|------|
 | 긍정 | 감사, 만족, 기쁨, 칭찬 |
 | 부정 | 불만, 실망, 걱정, 비판 |
 | 중립 | 질문, 정보 전달, 사실 기술 |
 
-#### 축3: Intent (LLM → 파인튜닝 전환 예정)
-| 값 | 설명 | 부서 활용 |
-|----|------|----------|
-| 질문/요청 | 답변이나 조치를 기대하는 글 | CS팀, 콘텐츠팀 |
-| 피드백/의견 | 경험·감정 공유 (답변 불필요) | 사업팀, 경영진 |
-| 제보/건의 | 문제 신고, 기능 요청, 정책 제안 | 개발팀, 운영팀 |
-| 정보공유 | 뉴스, 분석, 경험 등 정보 전달 목적 | 콘텐츠팀 |
-
-#### 축4: Urgency (규칙 기반)
-| 값 | 조건 |
-|----|------|
-| 긴급 | 서비스이슈 + 부정 + 키워드(결제오류, 접속불가, 사칭 등) |
-| 높음 | 서비스이슈 + (질문/요청 or 제보/건의) |
-| 보통 | 부정 감성 or 질문/요청 |
-| 낮음 | 기본값 (인사, 잡담 등) |
+- **모델**: `models/two_axis/topic/final_model`, `models/two_axis/sentiment/final_model`
+- **현재 정확도**: Topic 69.3%, Sentiment 84.1%
 
 #### Scenario: 주간 데이터 일괄 분류
 - GIVEN 1주치 편지글/게시글이 BigQuery에서 조회됨
-- WHEN 4축 분류 파이프라인 실행
-- THEN 각 항목에 topic, sentiment, intent, urgency + 각 confidence 필드가 부여됨
-- AND urgency_method는 "rule_based"로 표시됨
+- WHEN 2축 분류 파이프라인 실행
+- THEN 각 항목에 topic, sentiment, topic_confidence, sentiment_confidence 필드가 부여됨
 - AND 결과가 `data/classified_data_two_axis/{date}.json`에 캐싱됨
 - AND 이미 분류된 데이터는 건너뜀
 
@@ -56,41 +49,21 @@
 
 ---
 
-### Requirement: 부서 자동 라우팅
+### Requirement: Detail Tags 추출
 
-Topic × Intent 조합에 따라 담당 부서를 자동 매핑한다.
-
-#### 라우팅 매핑
-```
-(서비스 이슈, 제보/건의) → [개발팀]
-(서비스 이슈, 질문/요청) → [CS팀, 개발팀]
-(서비스 이슈, 피드백/의견) → [운영팀]
-(콘텐츠 반응, 질문/요청) → [콘텐츠팀]
-(콘텐츠 반응, 피드백/의견) → [콘텐츠팀, 사업팀]
-(투자 이야기, 질문/요청) → [콘텐츠팀]
-(투자 이야기, 피드백/의견) → [사업팀]
-(커뮤니티 소통, *) → [운영팀]
-```
-
-#### Scenario: 분류 결과에 부서 라우팅 부착
-- GIVEN 4축 분류가 완료된 항목
-- WHEN 라우팅 매핑 실행
-- THEN 각 항목에 `department_route: ["부서명", ...]` 필드가 추가됨
-
----
-
-### Requirement: Detail Tags 추출 (카테고리 태그 + 자유 태그)
-
-2축 분류 후, LLM(Claude Haiku)으로 28개 controlled vocabulary 카테고리 태그 + 자유 태그 + 요약을 추출한다. Intent 분류도 동일 호출에서 함께 수행한다.
+2축 분류 후, LLM(Claude Haiku)으로 세부 태그를 추출한다.
 
 - **모델**: claude-haiku-4-5-20251001 ($3.12/주, 2,542건 기준)
-- **카테고리 태그**: Topic별 6~8개, 총 28개
+- **카테고리 태그**: Topic별 6~8개, 총 28개 controlled vocabulary
+- **자유 태그**: 구체적 명사구 2~3개 (검색용)
+- **요약**: 15~40자 한줄 요약
+- **의도(Intent)**: 질문/요청, 피드백/의견, 제보/건의, 정보공유 (동일 호출에서 부수 추출)
 - **품질 기준**: 목록 외 태그 비율 < 5%, 태그 커버리지 > 90%
 
-#### Scenario: 카테고리 태그 + Intent 동시 추출
+#### Scenario: 태그 + Intent 추출
 - GIVEN 2축 분류가 완료된 항목
 - WHEN detail_tags 추출 실행
-- THEN 각 항목에 `detail_tags: {category_tags: [...], free_tags: [...], summary: "..."}` + `intent` + `intent_confidence`가 부여됨
+- THEN 각 항목에 detail_tags + intent가 부여됨
 - AND category_tags는 반드시 28개 허용 목록에서만 선택됨
 - AND 이미 detail_tags가 있는 항목은 건너뜀
 - AND 추가 API 호출 없이 기존 Haiku 1회 호출에서 통합 추출
@@ -114,7 +87,7 @@ Topic × Intent 조합에 따라 담당 부서를 자동 매핑한다.
 - AND 결과가 `data/sub_themes/{date}.json`에 저장됨
 
 #### Scenario: 부정 테마 요약
-- GIVEN 콘텐츠 반응/투자 이야기/커뮤니티 소통의 부정 항목들
+- GIVEN 각 Topic의 부정 항목들
 - WHEN LLM 패턴 요약 실행
 - THEN Topic별 부정 의견의 주요 패턴과 대표 사례가 요약됨
 
@@ -134,7 +107,7 @@ Topic × Intent 조합에 따라 담당 부서를 자동 매핑한다.
 - GIVEN 분류 완료 데이터
 - WHEN 엑셀 생성 실행
 - THEN `reports/two_axis_data_{date}.xlsx` 파일이 생성됨
-- AND 편지/게시글 시트에 카테고리 태그, 자유 태그, 요약, intent, urgency, department_route 컬럼이 포함됨
+- AND 편지/게시글 시트에 카테고리 태그, 자유 태그, 요약, 의도 컬럼이 포함됨
 
 ---
 
@@ -154,26 +127,38 @@ Topic × Intent 조합에 따라 담당 부서를 자동 매핑한다.
 
 ---
 
+### Requirement: 자연어 채팅 인터페이스 _(구축 예정)_
+
+분류된 VOC 데이터를 자연어로 질문하고, 인사이트를 받을 수 있는 웹 채팅 인터페이스.
+
+#### Scenario: 자연어 쿼리
+- GIVEN 분류 완료 데이터가 있음
+- WHEN 사용자가 "이번 주 결제 관련 불만 몇 건이야?" 질문
+- THEN LLM이 쿼리 조건 추출 → 데이터 필터링 → 인사이트 요약 → 답변
+- AND 답변에 근거 데이터 건수 + 원본 보기 링크 제공
+
+#### Scenario: 원본 검증
+- GIVEN 채팅 답변이 제공됨
+- WHEN 사용자가 원본 보기 클릭
+- THEN 필터링된 원본 데이터 테이블이 표시됨
+- AND 오분류 발견 시 피드백 가능 → 검수 데이터로 축적
+
+상세 시나리오: [analysis-scenarios.md](./analysis-scenarios.md)
+
+---
+
 ### Requirement: 채널톡 CS 데이터 분류 _(2차 우선순위)_
 
-채널톡 CS 문의 데이터를 BigQuery에서 조회하여 별도 분류 체계로 분류한다.
+채널톡 CS 문의 데이터를 BigQuery에서 조회하여 분류한다.
 
 - **데이터소스**: `us-service-data.channel_io.messages`
 - **분류 단위**: chatId 기준 1대화 = 1분류
 - **전처리**: 사용자 메시지만 연결, 앞 500자 + 마지막 200자
 
-#### 채널톡 분류 카테고리
-| 축 | 값 |
-|----|------|
-| Intent | 결제/환불, 앱/서비스 장애, 계정/인증, 콘텐츠 접근, 멤버십/구독, 일반 문의 |
-| Sentiment | 긍정/부정/중립 (편지글 Sentiment 모델 재활용) |
-| Status | 봇_응답만 / 상담원_연결 / 미해결 (규칙 기반) |
-| Resolution | 해결 / 진행중 / 미해결 (LLM 판별) |
-
 #### Scenario: 채널톡 대화 분류
 - GIVEN 1주치 채널톡 대화가 BigQuery에서 조회됨
-- WHEN 채널톡 분류 파이프라인 실행
-- THEN chatId별로 Intent, Sentiment, Status, Resolution이 부여됨
+- WHEN 분류 파이프라인 실행
+- THEN chatId별로 Topic, Sentiment, detail_tags가 부여됨
 
 ---
 
@@ -181,18 +166,10 @@ Topic × Intent 조합에 따라 담당 부서를 자동 매핑한다.
 
 자동 분류 결과의 정확도를 측정하고, confidence 기반으로 검수 대상을 추출한다.
 
-#### Confidence 임계값
-| 범위 | 처리 |
-|------|------|
-| ≥ 0.85 | 자동 수용 |
-| 0.60 ~ 0.85 | 조건부 수용 (전주 분포와 크게 다르지 않으면 수용) |
-| < 0.60 | 반드시 사람 검수 |
-
 #### Scenario: 검수 대상 추출
 - GIVEN 주간 분류 완료 데이터
-- WHEN confidence 기반 라우팅 실행
-- THEN auto / conditional / review 3가지로 분류됨
-- AND 검수 대상은 CSV로 추출 가능
+- WHEN 검수 대상 추출 실행
+- THEN confidence 낮은 건 전량 + 고신뢰 건 랜덤 샘플이 CSV로 추출됨
 
 #### Scenario: 검수 결과 반영
 - GIVEN 검수자가 수정한 라벨
@@ -202,48 +179,23 @@ Topic × Intent 조합에 따라 담당 부서를 자동 매핑한다.
 
 ---
 
-### Requirement: 신뢰 임계값 + Intent 파인튜닝 _(Phase 2)_
+### Requirement: 모델 개선 + 재학습 _(Phase 2)_
 
-검수 데이터 기반으로 신뢰 임계값을 최적화하고, Intent 축을 LLM에서 파인튜닝 모델로 전환한다.
+검수 데이터 기반으로 모델을 재학습하여 정확도를 향상시킨다.
 
-#### Scenario: 자동 통과 판정
-- GIVEN 검수 데이터 기반 최적 임계값이 설정됨
-- WHEN 분류 결과의 confidence가 임계값 이상
-- THEN 해당 항목은 사람 검수 없이 자동 통과
-- AND 자동 통과 건의 오분류율 5% 이하
-- AND 검수 비율 15~25%로 감소
-
-#### Scenario: Intent 모델 파인튜닝
-- GIVEN 검수 데이터에서 Intent 라벨 500건+ 축적
-- WHEN Intent 파인튜닝 실행
-- THEN LLM 대비 정확도 비교 리포트 생성됨
-- AND 성능 동등 이상이면 파인튜닝 모델로 전환
-
----
-
-### Requirement: 재학습 파이프라인 _(Phase 3)_
-
-검수 데이터를 활용하여 주기적으로 모델을 재학습하고, Vertex AI Custom Training으로 자동화한다.
-
-#### Scenario: 월간 재학습
-- GIVEN 검수 데이터 500건+ 축적 (4주치)
+#### Scenario: 재학습
+- GIVEN 검수 데이터 500건+ 축적
 - WHEN 재학습 파이프라인 실행
-- THEN 기존 학습 데이터 + 검수 데이터 병합 → 품질 검증 → 모델 학습
-- AND 재학습 전후 테스트셋 A/B 성능 비교 리포트 생성됨
-- AND 성능 향상시 배포 / 저하시 Slack 알림
+- THEN 재학습 전후 테스트셋 정확도 비교 리포트 생성됨
+- AND Topic 정확도 69.3% → 80%+ 목표
 
 ---
 
-### Requirement: 드리프트 모니터링 _(Phase 4)_
+### Requirement: 드리프트 모니터링 _(Phase 3)_
 
 분류 분포 변화를 감지하고 알림을 발송한다.
 
 #### Scenario: 드리프트 감지
 - GIVEN 주간 분류 분포 이력
-- WHEN chi-square 검정에서 p < 0.01 감지
-- THEN Slack 알림 발생 + 검수 비율 일시적 상향
-
-#### Scenario: 주간 품질 점검
-- GIVEN 주간 분류 완료
-- WHEN 품질 점검 스크립트 실행
-- THEN Topic/Sentiment 분포 변화, 평균 confidence 추이, 마스터별 부정 비율 급증 감지
+- WHEN 이상 감지 (분포 급변, confidence 급락)
+- THEN Slack 알림 발생

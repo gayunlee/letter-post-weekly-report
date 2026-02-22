@@ -1,7 +1,8 @@
-"""2축 분류 데이터 엑셀 내보내기
+"""분류 데이터 엑셀 내보내기
 
-1축 excel_exporter.py와 독립. 컬럼: 주제(Topic) + 감성(Sentiment) 분리.
+컬럼: 주제(Topic) + 감성(Sentiment) 분리 + detail_tags.
 피벗 분석이 편하도록 '주제×감성' 조합 컬럼도 포함.
+Intent(의도) 데이터가 있으면 의도 컬럼을 자동 추가.
 """
 import os
 from typing import List, Dict, Any
@@ -16,11 +17,17 @@ def export_two_axis_to_excel(
 ) -> str:
     """2축 분류된 데이터를 엑셀 파일로 내보내기"""
 
+    # Intent 필드 존재 여부 감지
+    has_intent = any(
+        item.get("classification", {}).get("intent")
+        for item in (letters + posts)
+    )
+
     letter_rows = []
     for letter in letters:
         cls = letter.get("classification", {})
         detail = letter.get("detail_tags", {})
-        letter_rows.append({
+        row = {
             "유형": "편지",
             "마스터": letter.get("masterName", "Unknown"),
             "클럽": letter.get("masterClubName", ""),
@@ -35,14 +42,18 @@ def export_two_axis_to_excel(
             "감성 신뢰도": round(cls.get("sentiment_confidence", 0), 3),
             "날짜": _format_date(letter.get("createdAt", "")),
             "차단": "Y" if letter.get("isBlock") == "true" else "N",
-        })
+        }
+        if has_intent:
+            row["의도"] = cls.get("intent", "")
+            row["의도 신뢰도"] = round(cls.get("intent_confidence", 0), 3)
+        letter_rows.append(row)
 
     post_rows = []
     for post in posts:
         cls = post.get("classification", {})
         detail = post.get("detail_tags", {})
         content = post.get("textBody") or post.get("body", "")
-        post_rows.append({
+        row = {
             "유형": "게시글",
             "마스터": post.get("masterName", "Unknown"),
             "클럽": post.get("masterClubName", ""),
@@ -58,7 +69,11 @@ def export_two_axis_to_excel(
             "감성 신뢰도": round(cls.get("sentiment_confidence", 0), 3),
             "날짜": _format_date(post.get("createdAt", "")),
             "차단": "Y" if post.get("isBlock") == "true" else "N",
-        })
+        }
+        if has_intent:
+            row["의도"] = cls.get("intent", "")
+            row["의도 신뢰도"] = round(cls.get("intent_confidence", 0), 3)
+        post_rows.append(row)
 
     df_letters = pd.DataFrame(letter_rows)
     df_posts = pd.DataFrame(post_rows)
@@ -108,6 +123,12 @@ def _write_pivot_sheet(writer, df: pd.DataFrame):
     row += len(pivot_master) + 3
 
     pivot_master_topic.to_excel(writer, sheet_name="피벗 요약", startrow=row)
+    row += len(pivot_master_topic) + 3
+
+    # 의도 피벗 (컬럼이 존재할 때만)
+    if "의도" in df.columns:
+        pivot_intent = pd.crosstab(df["주제"], df["의도"], margins=True, margins_name="합계")
+        pivot_intent.to_excel(writer, sheet_name="피벗 요약", startrow=row)
 
     ws = writer.sheets["피벗 요약"]
     ws.column_dimensions["A"].width = 18
@@ -129,6 +150,8 @@ def _set_column_widths(worksheet, df: pd.DataFrame):
         "요약": 40,
         "주제 신뢰도": 12,
         "감성 신뢰도": 12,
+        "의도": 15,
+        "의도 신뢰도": 12,
         "날짜": 18,
         "차단": 8,
     }

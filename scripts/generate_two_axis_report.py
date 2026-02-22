@@ -1,7 +1,7 @@
 """2축 분류 체계 주간 리포트 생성 스크립트
 
 기존 1축 generate_custom_week_report.py와 독립적으로 동작합니다.
-파이프라인: BigQuery → 2축 파인튜닝 분류 → 통계 분석 → 리포트 생성 → 엑셀 → Notion → Slack
+파이프라인: BigQuery → 2축 파인튜닝 분류 → detail_tags 추출 → 통계 분석 → 리포트 → 엑셀 → Notion → Slack
 
 사용법:
     python3 scripts/generate_two_axis_report.py
@@ -168,12 +168,13 @@ def main():
         print("\n  대상 주간 데이터가 없어 리포트를 생성할 수 없습니다.")
         return
 
-    # 2.5. Detail Tags 추출
+    # 2.5. Detail Tags 추출 (+ Intent 부수 추출)
     if not args.skip_detail_tags:
         # detail_tags가 이미 있는지 확인 (캐시된 데이터)
         has_tags = any(
             item.get("detail_tags") for item in (classified_letters + classified_posts)
         )
+
         if has_tags:
             print("\n[2.5단계] detail_tags — 이미 존재, 건너뜀")
         else:
