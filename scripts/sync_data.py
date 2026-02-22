@@ -2,11 +2,22 @@
 
 로컬 data/ 폴더를 Vultr Object Storage(S3 호환)와 동기화합니다.
 
+필요한 환경변수 (.env 또는 시스템 환경변수):
+    VULTR_S3_ENDPOINT     # Object Storage 엔드포인트 (예: https://sgp1.vultrobjects.com)
+    VULTR_S3_ACCESS_KEY   # Access Key
+    VULTR_S3_SECRET_KEY   # Secret Key
+    VULTR_S3_BUCKET       # 버킷 이름 (기본값: voc-data)
+
 사용법:
     python3 scripts/sync_data.py push          # 로컬 → 원격 (업로드)
     python3 scripts/sync_data.py pull          # 원격 → 로컬 (다운로드)
     python3 scripts/sync_data.py push --dry    # 변경 사항만 확인
     python3 scripts/sync_data.py status        # 원격 파일 목록
+
+또는 Makefile 사용:
+    make pull    # git pull + 데이터 다운로드
+    make push    # 데이터 업로드
+    make setup   # 최초 세팅 (의존성 설치 + 데이터 다운로드)
 """
 import os
 import sys
