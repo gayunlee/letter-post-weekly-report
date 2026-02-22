@@ -43,6 +43,7 @@ class TwoAxisReportGenerator:
     ) -> str:
         report = self._generate_header(start_date, end_date)
         report += self._generate_summary(stats)
+        report += self._generate_category_tags_section(stats)
         report += self._generate_master_details(stats)
         report += self._generate_service_issues_section(stats)
         report += self._generate_sub_theme_section(stats)
@@ -222,6 +223,39 @@ markdown 불릿 포인트 형식으로 작성해주세요."""
             return response.choices[0].message.content.strip()
         except Exception:
             return f"- 이번 주 전체 이용자 반응 규모는 총 {total['this_week']['total']}건입니다."
+
+    # ── 0.5 카테고리 태그 집계 ────────────────────────────────────────
+
+    def _generate_category_tags_section(self, stats: Dict[str, Any]) -> str:
+        """카테고리 태그 기반 세부 집계 섹션"""
+        tag_agg = stats.get("category_tag_aggregation")
+        if not tag_agg:
+            return ""
+
+        overall = tag_agg.get("overall", {})
+        by_topic = tag_agg.get("by_topic", {})
+        coverage = tag_agg.get("tag_coverage", 0)
+
+        if not overall:
+            return ""
+
+        section = f"## 카테고리 태그 집계\n\n"
+        section += f"태그 부착률: {coverage}% ({tag_agg['tagged_items']}/{tag_agg['total_items']}건)\n\n"
+
+        # Topic별 태그 테이블
+        for topic in TOPICS:
+            topic_tags = by_topic.get(topic, {})
+            if not topic_tags:
+                continue
+            section += f"**{topic}**\n\n"
+            section += "| 카테고리 태그 | 건수 |\n"
+            section += "| ------------- | ---- |\n"
+            for tag, count in sorted(topic_tags.items(), key=lambda x: -x[1]):
+                section += f"| {tag} | {count} |\n"
+            section += "\n"
+
+        section += "---\n\n"
+        return section
 
     # ── 1. 마스터별 상세 ──────────────────────────────────────────────
 

@@ -19,6 +19,7 @@ def export_two_axis_to_excel(
     letter_rows = []
     for letter in letters:
         cls = letter.get("classification", {})
+        detail = letter.get("detail_tags", {})
         letter_rows.append({
             "유형": "편지",
             "마스터": letter.get("masterName", "Unknown"),
@@ -27,6 +28,9 @@ def export_two_axis_to_excel(
             "주제": cls.get("topic", "미분류"),
             "감성": cls.get("sentiment", "미분류"),
             "주제×감성": f"{cls.get('topic', '미분류')} · {cls.get('sentiment', '미분류')}",
+            "카테고리 태그": ", ".join(detail.get("category_tags", [])),
+            "자유 태그": ", ".join(detail.get("free_tags", [])),
+            "요약": detail.get("summary", ""),
             "주제 신뢰도": round(cls.get("topic_confidence", 0), 3),
             "감성 신뢰도": round(cls.get("sentiment_confidence", 0), 3),
             "날짜": _format_date(letter.get("createdAt", "")),
@@ -36,6 +40,7 @@ def export_two_axis_to_excel(
     post_rows = []
     for post in posts:
         cls = post.get("classification", {})
+        detail = post.get("detail_tags", {})
         content = post.get("textBody") or post.get("body", "")
         post_rows.append({
             "유형": "게시글",
@@ -46,6 +51,9 @@ def export_two_axis_to_excel(
             "주제": cls.get("topic", "미분류"),
             "감성": cls.get("sentiment", "미분류"),
             "주제×감성": f"{cls.get('topic', '미분류')} · {cls.get('sentiment', '미분류')}",
+            "카테고리 태그": ", ".join(detail.get("category_tags", [])),
+            "자유 태그": ", ".join(detail.get("free_tags", [])),
+            "요약": detail.get("summary", ""),
             "주제 신뢰도": round(cls.get("topic_confidence", 0), 3),
             "감성 신뢰도": round(cls.get("sentiment_confidence", 0), 3),
             "날짜": _format_date(post.get("createdAt", "")),
@@ -116,6 +124,9 @@ def _set_column_widths(worksheet, df: pd.DataFrame):
         "주제": 15,
         "감성": 10,
         "주제×감성": 25,
+        "카테고리 태그": 25,
+        "자유 태그": 35,
+        "요약": 40,
         "주제 신뢰도": 12,
         "감성 신뢰도": 12,
         "날짜": 18,

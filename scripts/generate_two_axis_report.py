@@ -22,6 +22,7 @@ from src.integrations.notion_client import NotionReportClient
 from src.integrations.slack_client import SlackNotifier
 from src.utils.two_axis_excel_exporter import export_two_axis_to_excel
 from src.classifier_v2.sub_theme_analyzer import SubThemeAnalyzer, save_sub_themes
+from src.classifier_v2.detail_tag_extractor import DetailTagExtractor, aggregate_category_tags
 
 
 # 2축 데이터는 별도 디렉토리에 저장 (1축과 분리)
@@ -125,6 +126,9 @@ def main():
     parser.add_argument("--prev-end", default=None, help="전주 종료일 (미지정시 자동 계산)")
     parser.add_argument("--skip-notion", action="store_true", help="Notion 업로드 건너뛰기")
     parser.add_argument("--skip-slack", action="store_true", help="Slack 알림 건너뛰기")
+    parser.add_argument("--skip-detail-tags", action="store_true", help="detail_tags 추출 건너뛰기")
+    parser.add_argument("--detail-tag-model", default="claude-haiku-4-5-20251001",
+                        help="detail_tags 추출 모델 (기본: claude-haiku-4-5-20251001)")
     args = parser.parse_args()
 
     target_start = args.start
@@ -163,6 +167,58 @@ def main():
     if not classified_letters and not classified_posts:
         print("\n  대상 주간 데이터가 없어 리포트를 생성할 수 없습니다.")
         return
+
+    # 2.5. Detail Tags 추출
+    if not args.skip_detail_tags:
+        # detail_tags가 이미 있는지 확인 (캐시된 데이터)
+        has_tags = any(
+            item.get("detail_tags") for item in (classified_letters + classified_posts)
+        )
+        if has_tags:
+            print("\n[2.5단계] detail_tags — 이미 존재, 건너뜀")
+        else:
+            print(f"\n[2.5단계] detail_tags 추출 (모델: {args.detail_tag_model})")
+            tag_extractor = DetailTagExtractor(model=args.detail_tag_model)
+
+            if classified_letters:
+                print(f"  편지 {len(classified_letters)}건 태그 추출 중...")
+                classified_letters = tag_extractor.extract_tags_batch(
+                    classified_letters, content_field="message"
+                )
+            if classified_posts:
+                print(f"  게시글 {len(classified_posts)}건 태그 추출 중...")
+                classified_posts = tag_extractor.extract_tags_batch(
+                    classified_posts, content_field="textBody"
+                )
+
+            # 비용 리포트
+            cost = tag_extractor.get_cost_report()
+            print(f"  비용: ${cost['estimated_cost_usd']:.4f} "
+                  f"(건당 ${cost['cost_per_item_usd']:.6f}, "
+                  f"파싱 성공률 {cost['parse_success_rate']}%)")
+
+            # 태그 집계
+            all_items = classified_letters + classified_posts
+            agg = aggregate_category_tags(all_items)
+            print(f"  태그 커버리지: {agg['tag_coverage']}% ({agg['tagged_items']}/{agg['total_items']}건)")
+            if agg["overall"]:
+                top5 = agg["overall"].most_common(5)
+                print(f"  상위 태그: {', '.join(f'{t}({c})' for t, c in top5)}")
+
+            # detail_tags 포함하여 캐시 다시 저장
+            import json
+            cache_path = os.path.join(TWO_AXIS_DATA_DIR, f"{target_start}.json")
+            cache_data = {
+                "start_date": target_start,
+                "end_date": target_end,
+                "letters": classified_letters,
+                "posts": classified_posts,
+            }
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(cache_data, f, ensure_ascii=False, indent=2, default=str)
+            print(f"  캐시 업데이트: {cache_path}")
+    else:
+        print("\n[2.5단계] detail_tags 추출 — 건너뜀")
 
     # 3. 통계 분석
     print(f"\n[3단계] 2축 통계 분석")
@@ -206,6 +262,16 @@ def main():
 
     # stats에 서브 테마 추가 (리포트 생성에 사용)
     stats["sub_themes"] = sub_themes
+
+    # 카테고리 태그 집계 추가
+    all_items = classified_letters + classified_posts
+    if any(item.get("detail_tags") for item in all_items):
+        tag_agg = aggregate_category_tags(all_items)
+        # Counter를 dict로 변환 (JSON 직렬화)
+        tag_agg["overall"] = dict(tag_agg["overall"])
+        tag_agg["by_topic"] = {k: dict(v) for k, v in tag_agg["by_topic"].items()}
+        tag_agg["by_sentiment"] = {k: dict(v) for k, v in tag_agg["by_sentiment"].items()}
+        stats["category_tag_aggregation"] = tag_agg
 
     # 4. 리포트 생성
     print(f"\n[4단계] 2축 리포트 생성")
