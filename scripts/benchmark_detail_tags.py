@@ -91,7 +91,10 @@ class OpenAIDetailTagExtractor:
                 text = text.split("```")[1]
                 if text.startswith("json"):
                     text = text[4:]
-            result = json.loads(text.strip())
+            text = text.strip()
+            if text.startswith("{{") and text.endswith("}}"):
+                text = text[1:-1]
+            result = json.loads(text)
         except (json.JSONDecodeError, IndexError):
             self._parse_failures += 1
             return {"category_tags": [], "free_tags": [], "summary": "파싱 실패", "parse_ok": False}
@@ -254,7 +257,7 @@ def main():
     # 모델별 벤치마크
     model_map = {
         "haiku": ("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
-        "sonnet": ("claude-sonnet-4-5-20250514", "Claude Sonnet 4.5"),
+        "sonnet": ("claude-sonnet-4-20250514", "Claude Sonnet 4"),
         "gpt4omini": ("gpt-4o-mini", "GPT-4o-mini"),
     }
 

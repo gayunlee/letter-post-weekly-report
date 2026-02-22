@@ -88,12 +88,11 @@ SYSTEM_PROMPT = """당신은 금융 교육 플랫폼의 VOC(Voice of Customer) �
 
 ## 응답 형식
 반드시 아래 JSON만 출력하세요. 다른 텍스트 없이:
-{{"category_tags": ["태그1"], "free_tags": ["태그1", "태그2"], "summary": "한 줄 요약"}}"""
+{"category_tags": ["태그1"], "free_tags": ["태그1", "태그2"], "summary": "한 줄 요약"}"""
 
 # 모델별 비용 (1K tokens 기준, USD)
 MODEL_COSTS = {
     "claude-haiku-4-5-20251001": {"input": 0.001, "output": 0.005},
-    "claude-sonnet-4-5-20250514": {"input": 0.003, "output": 0.015},
     "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
 }
 
@@ -174,7 +173,11 @@ class DetailTagExtractor:
                 text = text.split("```")[1]
                 if text.startswith("json"):
                     text = text[4:]
-            result = json.loads(text.strip())
+            text = text.strip()
+            # 이중 중괄호 처리 (프롬프트의 {{ }} 복사 방지)
+            if text.startswith("{{") and text.endswith("}}"):
+                text = text[1:-1]
+            result = json.loads(text)
         except (json.JSONDecodeError, IndexError):
             self._parse_failures += 1
             return {
