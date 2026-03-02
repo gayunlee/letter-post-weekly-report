@@ -69,3 +69,5 @@ Thumbs.db
 # Logs
 *.log
 logs/
+.claude/
+notebooks/

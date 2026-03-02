@@ -13,11 +13,15 @@
 
 ## Requirements
 
+> **⚠️ v3 전환 진행 중** (2026-03-02)
+> 아래 Topic 4분류는 현행 v2 (소재 기반). v3 5분류(운영 피드백/서비스 피드백/콘텐츠 반응/투자 담론/기타)로 전환 진행 중.
+> 상세: [phase-0.5-taxonomy-redesign](../changes/phase-0.5-taxonomy-redesign/specs/voc-classification/spec.md)
+
 ### Requirement: 2축 분류 (Topic × Sentiment)
 
 파인튜닝된 KcBERT 모델로 편지글/게시글을 Topic 4개 × Sentiment 3개로 분류한다.
 
-#### Topic
+#### Topic (v2, 현행)
 | 값 | 설명 |
 |----|------|
 | 콘텐츠 반응 | 마스터 콘텐츠(강의, 리포트, 방송)에 대한 반응 |

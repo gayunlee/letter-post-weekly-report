@@ -33,9 +33,15 @@ load_dotenv()
 # 동기화 대상 디렉토리
 SYNC_DIRS = [
     "data/classified_data_two_axis",
+    "data/classified_data_v3",
     "data/sub_themes",
     "data/stats",
     "data/review",
+    "data/colab_export",
+    "data/gold_dataset",
+    "data/channel_io",
+    "data/training_data",
+    "models/v3",
     "reports",
 ]
 
