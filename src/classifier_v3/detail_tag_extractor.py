@@ -1,8 +1,9 @@
-"""Detail Tag + Intent 추출 모듈 (v3 — 5분류 체계)
+"""Detail Tag + Intent 추출 모듈 (v3 — 4분류 체계)
 
-v2와 동일 구조이되, Topic 체계가 5분류로 변경됨.
-- 운영 피드백 / 서비스 피드백 / 콘텐츠 반응 / 투자 담론 / 기타
-- 카테고리 태그 29종이 5분류 Topic에 맞춰 배치
+v2와 동일 구조이되, Topic 체계가 4분류로 변경됨.
+- 운영 피드백 / 서비스 피드백 / 콘텐츠·투자 / 기타
+- "콘텐츠·투자"는 콘텐츠 반응 + 투자 담론 태그를 합산하여 사용
+- 카테고리 태그 28종이 4분류 Topic에 맞춰 배치
 """
 import json
 import time
@@ -80,7 +81,10 @@ class DetailTagExtractorV3:
         self._invalid_tag_count = 0
 
     def _build_system_prompt(self, topic: str) -> str:
-        tags = CATEGORY_TAGS.get(topic, [])
+        if topic == "콘텐츠·투자":
+            tags = CATEGORY_TAGS.get("콘텐츠 반응", []) + CATEGORY_TAGS.get("투자 담론", [])
+        else:
+            tags = CATEGORY_TAGS.get(topic, [])
         tag_list = "\n".join(f"- {t}" for t in tags)
         return SYSTEM_PROMPT.replace("{category_list}", tag_list)
 
@@ -151,7 +155,12 @@ class DetailTagExtractorV3:
             intent_confidence = 0.5
         intent_confidence = max(0.0, min(1.0, float(intent_confidence)))
 
-        valid_for_topic = set(CATEGORY_TAGS.get(topic, []))
+        if topic == "콘텐츠·투자":
+            valid_for_topic = set(
+                CATEGORY_TAGS.get("콘텐츠 반응", []) + CATEGORY_TAGS.get("투자 담론", [])
+            )
+        else:
+            valid_for_topic = set(CATEGORY_TAGS.get(topic, []))
         validated_tags = []
         for tag in cat_tags:
             if tag in valid_for_topic:

@@ -1,9 +1,9 @@
 """v3 Topic 분류기 — KcBERT 파인튜닝 모델 기반
 
-v3 5분류 Topic(운영 피드백/서비스 피드백/콘텐츠 반응/투자 담론/기타) +
+v3 4분류 Topic(운영 피드백/서비스 피드백/콘텐츠·투자/기타) +
 v2 Sentiment(긍정/부정/중립) 모델을 조합하여 2축 분류를 수행합니다.
 
-Topic 모델: models/v3/topic/final_model/ (Colab에서 파인튜닝)
+Topic 모델: models/v3/topic_4cat/final_model/ (4분류 KcBERT)
 Sentiment 모델: models/two_axis/sentiment/final_model/ (v2 재사용)
 
 사용법:
@@ -20,7 +20,7 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 
 class V3TopicClassifier:
-    """v3 Topic(5분류) + Sentiment(3분류) 파인튜닝 분류기"""
+    """v3 Topic(4분류) + Sentiment(3분류) 파인튜닝 분류기"""
 
     def __init__(
         self,
@@ -31,7 +31,7 @@ class V3TopicClassifier:
         project_root = Path(__file__).parent.parent.parent
 
         if topic_model_dir is None:
-            topic_model_dir = project_root / "models" / "v3" / "topic" / "final_model"
+            topic_model_dir = project_root / "models" / "v3" / "topic_4cat" / "final_model"
         if sentiment_model_dir is None:
             sentiment_model_dir = project_root / "models" / "two_axis" / "sentiment" / "final_model"
 
@@ -56,7 +56,7 @@ class V3TopicClassifier:
         else:
             self.device = torch.device(device)
 
-        # Topic 모델 (v3 5분류)
+        # Topic 모델 (v3 4분류)
         print(f"v3 Topic 모델 로드: {self.topic_dir}")
         self.topic_tokenizer = AutoTokenizer.from_pretrained(str(self.topic_dir))
         self.topic_model = AutoModelForSequenceClassification.from_pretrained(str(self.topic_dir))
@@ -77,7 +77,7 @@ class V3TopicClassifier:
             self.id_to_sentiment = {int(k): v for k, v in json.load(f)["id_to_category"].items()}
 
         print(f"  Device: {self.device}")
-        print(f"  Topic (v3): {list(self.id_to_topic.values())}")
+        print(f"  Topic (v3 4cat): {list(self.id_to_topic.values())}")
         print(f"  Sentiment: {list(self.id_to_sentiment.values())}")
 
     def _predict_batch(self, tokenizer, model, id_map, texts: List[str]) -> List[Dict[str, Any]]:
@@ -100,9 +100,19 @@ class V3TopicClassifier:
             pred_ids = torch.argmax(probs, dim=-1).tolist()
             confs = probs.max(dim=-1).values.tolist()
 
+            # top-2 margin 계산
+            topk = torch.topk(probs, k=min(2, probs.shape[-1]), dim=-1)
+            margins = (topk.values[:, 0] - topk.values[:, 1]).tolist()
+            top2_ids = topk.indices[:, 1].tolist()
+
         return [
-            {"label": id_map.get(pid, "미분류"), "confidence": conf}
-            for pid, conf in zip(pred_ids, confs)
+            {
+                "label": id_map.get(pid, "미분류"),
+                "confidence": conf,
+                "margin": margin,
+                "top2_label": id_map.get(t2, "미분류"),
+            }
+            for pid, conf, margin, t2 in zip(pred_ids, confs, margins, top2_ids)
         ]
 
     def classify_content(self, content: str) -> Dict[str, Any]:
@@ -125,6 +135,8 @@ class V3TopicClassifier:
         return {
             "topic": topic_res["label"],
             "topic_confidence": topic_res["confidence"],
+            "topic_margin": topic_res["margin"],
+            "topic_top2": topic_res["top2_label"],
             "sentiment": sent_res["label"],
             "sentiment_confidence": sent_res["confidence"],
             "method": "finetuned_v3",
@@ -176,6 +188,8 @@ class V3TopicClassifier:
                 result["classification"] = {
                     "topic": topic_preds[j]["label"],
                     "topic_confidence": topic_preds[j]["confidence"],
+                    "topic_margin": topic_preds[j]["margin"],
+                    "topic_top2": topic_preds[j]["top2_label"],
                     "sentiment": sent_preds[j]["label"],
                     "sentiment_confidence": sent_preds[j]["confidence"],
                     "method": "finetuned_v3",

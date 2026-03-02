@@ -1,12 +1,13 @@
 """v3 분류 체계 주간 분류 스크립트
 
-BigQuery → v3 Topic(5분류) + Sentiment(3분류) 분류 → JSON 캐시 저장
+BigQuery → v3 Topic(4분류) + Sentiment(3분류) 분류 → 보정 → JSON 캐시 저장
 리포트 생성 없이 분류만 수행합니다 (리포트는 추후 별도 파이프라인).
 
 사용법:
     python3 scripts/classify_v3.py
     python3 scripts/classify_v3.py --start 2026-02-09 --end 2026-02-16
-    python3 scripts/classify_v3.py --skip-detail-tags   # 태그 추출 생략
+    python3 scripts/classify_v3.py --skip-detail-tags   # 태그 추출 + 보정 생략
+    python3 scripts/classify_v3.py --skip-correction     # 보정만 생략
 """
 import sys
 import os
@@ -114,6 +115,7 @@ def main():
     parser.add_argument("--start", default="2026-02-09", help="시작일 (YYYY-MM-DD)")
     parser.add_argument("--end", default="2026-02-16", help="종료일 (exclusive)")
     parser.add_argument("--skip-detail-tags", action="store_true", help="detail_tags 추출 생략")
+    parser.add_argument("--skip-correction", action="store_true", help="LLM topic 보정 생략")
     parser.add_argument("--detail-tag-model", default="claude-haiku-4-5-20251001",
                         help="detail_tags 모델 (기본: claude-haiku-4-5-20251001)")
     args = parser.parse_args()
@@ -189,7 +191,28 @@ def main():
             agg = aggregate_category_tags(classified_letters + classified_posts)
             print(f"  태그 커버리지: {agg['tag_coverage']}% ({agg['tagged_items']}/{agg['total_items']}건)")
 
-            # 캐시 업데이트 (detail_tags 포함)
+            # [3단계] topic 보정 (LLM 재검증)
+            if not args.skip_correction:
+                print("\n[3단계] topic 보정 — LLM 재검증")
+                from src.classifier_v3.topic_corrector import correct_topics
+
+                if classified_letters:
+                    print(f"  편지 {len(classified_letters)}건 보정 중...")
+                    letter_result = correct_topics(
+                        classified_letters, content_field="message",
+                    )
+                    classified_letters = letter_result["items"]
+
+                if classified_posts:
+                    print(f"  게시글 {len(classified_posts)}건 보정 중...")
+                    post_result = correct_topics(
+                        classified_posts, content_field="textBody",
+                    )
+                    classified_posts = post_result["items"]
+            else:
+                print("\n[3단계] topic 보정 — 건너뜀")
+
+            # 캐시 업데이트 (detail_tags + 보정 포함)
             cache_path = os.path.join(V3_DATA_DIR, f"{args.start}.json")
             cache_data = {
                 "start_date": args.start,

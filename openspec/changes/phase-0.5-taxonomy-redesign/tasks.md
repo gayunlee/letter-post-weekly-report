@@ -95,9 +95,67 @@ make push   # models/v3/ 업로드
   - 미결: 경계 규칙, 수강 데이터 조인 키, bot 응답 참고 여부, 마스터 매핑
   - 상세: `channel-talk-plan.md` 참조
 
-## 대기 (파인튜닝 + 벤치마크 완료 후)
+## 완료 (4분류 전환)
 
-- [ ] `python3 scripts/classify_v3.py` 분류 실행 + 정확도 확인
+**결정**: 콘텐츠 반응 + 투자 담론 → "콘텐츠·투자" 합산 (5분류 → 4분류)
+- 근거: Test 83.1% → 93.4% (+10.3%p), 오분류 61% 해소
+- 세부 구분은 detail_tags 28종 + sentiment로 슬라이싱
+- 상세: `decisions/2026-03-02-v3-4cat-merge.md`
+
+- [x] 4분류 학습 데이터 생성 (`data/training_data/v3/topic_4cat/`)
+- [x] 벡터 KNN 분류기 구현 (`src/classifier_v3/vector_v3_classifier.py`)
+- [x] 5분류 벤치마크 완료 (KcBERT 83.1% / 벡터 83.5% / 하이브리드 84.0%)
+- [x] 4분류 KcBERT 파인튜닝 (`models/v3/topic_4cat/`) — Test 93.3%, Golden 77.5%
+- [x] `v3_topic_classifier.py` 기본 경로 4분류 전환 + margin/top2 노출
+- [x] `detail_tag_extractor.py` "콘텐츠·투자" 태그 합산 처리
+- [x] `classify_v3.py` 4분류 파이프라인 반영
+
+## 진행 중 (소수 카테고리 보정 파이프라인)
+
+잔존 오분류의 실제 구조 (Golden 102건 기준, 사람 검수 후):
+- **기타↔콘텐츠·투자 혼동**: 전체 오분류의 ~56% → LLM 보정 대상 아님
+- **소수 카테고리 흡수**: ~20% → LLM 보정 대상
+- 기타: ~24%
+
+### 시도한 접근과 결과
+
+1. ~~tag 키워드 매칭 보정 ($0)~~ — **폐기**
+   - detail_tags/summary에서 운영/서비스 키워드 감지 시 topic 보정
+   - 결과: 77.5% → **22.5%로 폭락** (API 에러 메시지 "오류"가 SERVICE_KEYWORDS에 매칭)
+   - 교훈: 규칙 기반 후처리는 예상치 못한 입력에 취약
+
+2. ~~LLM-only, margin 기반 선별~~ — **폐기**
+   - softmax margin < 0.3인 건만 Haiku binary 검증
+   - 결과: **후보 0건**. KcBERT softmax margin이 전부 0.93+ (극도로 overconfident)
+   - 교훈: 파인튜닝 BERT의 calibration 문제는 구조적. Temperature Scaling 없이 raw softmax는 신뢰 불가
+
+3. **LLM-only, top2 기반 선별** — 현행
+   - 조건: `topic == "콘텐츠·투자" AND top2 ∈ {운영/서비스 피드백}`
+   - 후보 56/102건 식별, confidence ≥ 0.6일 때만 보정
+   - API 장애로 **벤치마크 미실행**
+
+### Golden set 사람 검수
+
+Opus 4.6이 라벨링한 golden set에서 "기타" 카테고리 오라벨링 발견.
+같은 Opus로 재검수하면 동일 판단 반복 → 사람 검수 실시.
+
+- 16건 검토, **7건 수정** (기타→콘텐츠·투자 5건, 기타→운영 피드백 2건)
+- **Golden 정확도: 77.5% → 80.4% (+2.9%p)** — 모델 변경 없이, 라벨만 수정
+- `v5_golden_set.json`에 `v4_topic` 필드 추가 (4분류 평가용)
+
+### 현재 상태
+
+- [x] `src/classifier_v3/topic_corrector.py` 생성 — LLM binary 보정 (top2 기반, 키워드 매칭 폐기)
+- [x] `scripts/benchmark_correction.py` 생성 — golden set 보정 효과 벤치마크
+- [x] `scripts/classify_v3.py` 보정 단계 삽입 (`--skip-correction` 플래그)
+- [x] Golden set 사람 검수 완료 (7건 수정, 77.5% → 80.4%)
+- [ ] **벤치마크 실행** — API 복구 후 `python3 scripts/benchmark_correction.py`
+- [ ] 결과에 따라 보정 임계값 튜닝
+- [ ] 결과 S3 업로드 (`make push`)
+
+## 대기 (보정 파이프라인 검증 후)
+
+- [ ] `python3 scripts/classify_v3.py` 주간 분류 실행
 - [ ] 채널톡 golden set 생성 + Opus 라벨링
 - [ ] 채널톡 KcBERT 파인튜닝
 

@@ -41,6 +41,7 @@ SYNC_DIRS = [
     "data/gold_dataset",
     "data/channel_io",
     "data/training_data",
+    "data/vectorstore_v3",
     "models/v3",
     "reports",
 ]

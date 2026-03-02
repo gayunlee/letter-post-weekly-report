@@ -50,14 +50,58 @@
 - 평균 신뢰도: 0.865, 에러: 22건 (0.4%)
 - 필터 후 훈련 대상: 4,980건 (신뢰도<0.7 403건 + 짧은텍스트 579건 제외)
 
+### 5분류 → 4분류 전환
+
+5분류 벤치마크에서 콘텐츠 반응↔투자 담론 혼동이 오분류의 61%를 차지.
+합산 시 Test 83.1% → 93.4% (+10.3%p). 세부 분석은 detail_tags + sentiment로 대체.
+
+| 4분류 Topic | 원본 | Train | Val | Test |
+|------------|------|-------|-----|------|
+| 콘텐츠·투자 | 콘텐츠 반응 + 투자 담론 | 3,249 | 432 | 648 |
+| 운영 피드백 | 운영 피드백 | 200 | 26 | 39 |
+| 기타 | 기타 | 229 | 30 | 45 |
+| 서비스 피드백 | 서비스 피드백 | 62 | 8 | 12 |
+
+상세: `decisions/2026-03-02-v3-4cat-merge.md`
+
+### 소수 카테고리 보정 파이프라인
+
+4분류 KcBERT(Test 93.3%, Golden 80.4%)의 잔존 오분류 구조:
+- **기타↔콘텐츠·투자 혼동 ~56%**: LLM 보정으로 해결 불가 (분류 체계 자체의 경계 모호성)
+- **소수 카테고리→다수 클래스 흡수 ~20%**: LLM 보정 대상
+- **기타 ~24%**
+
+```
+KcBERT 4분류 → [보정] LLM 재검증 (top2가 소수 카테고리인 건만) → 캐시 저장
+```
+
+**폐기한 접근:**
+- ~~tag 키워드 매칭~~: 에러 메시지 등 예상치 못한 텍스트에 취약하여 정확도 폭락 (77.5%→22.5%)
+- ~~softmax margin 기반 선별~~: KcBERT가 극도로 overconfident (margin 전부 0.93+), 선별 불가
+
+**현행 LLM 재검증 (~$0.1~0.2/주)**
+- 조건: topic=콘텐츠·투자 AND topic_top2 ∈ {운영/서비스 피드백} (margin 조건 제거)
+- Haiku에게 binary 질문: "콘텐츠·투자인가, [운영/서비스 피드백]인가?"
+- confidence ≥ 0.6일 때만 보정
+- detail_tags 추출과 독립적으로 동작 (classification의 top2만 사용)
+- 벤치마크 미실행 상태 (API 장애)
+
+**Golden set 사람 검수 (완료)**
+- Opus 4.6 라벨링 오류 7/16건 발견 (기타 카테고리 집중)
+- 수정 후 Golden 정확도: 77.5% → 80.4% (+2.9%p, 모델 변경 없이)
+- 교훈: 같은 모델(Opus)로 재검수는 무의미 → 사람 검수 필수
+- `v5_golden_set.json`에 `v4_topic` 필드 추가
+
 ## 코드 구조
 
 ```
 src/classifier_v3/
 ├── __init__.py              # V3TopicClassifier export
-├── taxonomy.py              # v3 5분류 체계 정의 (5개 Topic + 29개 카테고리 태그)
-├── v3_topic_classifier.py   # v3 추론 분류기 (Topic 5분류 + Sentiment, CPU 추론)
-├── detail_tag_extractor.py  # v3용 태그 추출기
+├── taxonomy.py              # v3 분류 체계 정의 (4분류 Topic + 28개 카테고리 태그)
+├── v3_topic_classifier.py   # v3 추론 분류기 (4분류 Topic + Sentiment, margin/top2 포함)
+├── vector_v3_classifier.py  # 벡터 KNN 분류기 (k=7, 유사도 가중 투표)
+├── detail_tag_extractor.py  # v3용 태그 추출기 (콘텐츠·투자 태그 합산 지원)
+├── topic_corrector.py       # 소수 카테고리 보정 (LLM binary 재검증)
 ├── four_axis_classifier.py  # 기존 4축 래퍼 (미사용, 참고용)
 ├── urgency_rules.py         # 기존 긴급도 규칙 (미사용, 참고용)
 └── department_router.py     # 기존 부서 라우팅 (미사용, 참고용)
@@ -71,26 +115,33 @@ scripts/
 ├── label_v3_taxonomy.py         # 전체 데이터 LLM 라벨링 (API 의존)
 ├── prepare_v3_training_data.py  # 훈련 데이터 split
 ├── train_v3_topic.py            # KcBERT 파인튜닝
+├── build_v3_vector_index.py     # 벡터 인덱스 구축 (labeled_all.json → ChromaDB)
+├── benchmark_v3_vector.py       # KcBERT / 벡터 KNN / 하이브리드 3종 비교 벤치마크
 ├── benchmark_v3_golden.py       # Golden set 벤치마크 (v2 대비 비교)
-├── classify_v3.py               # v3 주간 분류 (BigQuery → 분류 → JSON)
+├── benchmark_correction.py      # 보정 파이프라인 벤치마크 (golden set 기준)
+├── classify_v3.py               # v3 주간 분류 (BigQuery → 분류 → 보정 → JSON)
 ├── explore_channel_io.py        # 채널톡 데이터 탐색
 └── export_channel_for_labeling.py  # 채널톡 라벨링용 JSON 추출
 
-models/v3/topic/final_model/     # 로컬 파인튜닝 결과 (make push/pull로 동기화)
+models/v3/
+├── topic/final_model/           # 5분류 KcBERT (비교 기준, 보존)
+└── topic_4cat/final_model/      # 4분류 KcBERT (현행)
 
 data/
+├── vectorstore_v3/              # 벡터 KNN 인덱스 (ChromaDB, S3 동기화)
 ├── gold_dataset/
 │   ├── v3_golden_set.json       # 초기 4분류 golden set (52건, 참고용)
-│   └── v5_golden_set.json       # 5분류 golden set (102건, 현행)
+│   └── v5_golden_set.json       # 5분류 golden set (102건, 4분류 평가에도 사용)
 ├── classified_data_v3/          # v3 분류 결과 캐시 (주간별 JSON)
 ├── channel_io/                  # 채널톡 데이터
 │   └── channel_items_for_labeling.json
 └── training_data/v3/
     ├── labeled_all.json         # Opus 4.6 라벨링 결과 (5,962건)
-    └── topic/
-        ├── train.json           # 3,740건
-        ├── val.json             # 496건
-        ├── test.json            # 744건
+    ├── topic/                   # 5분류 split (비교 기준)
+    │   ├── train.json / val.json / test.json
+    │   └── category_mapping.json
+    └── topic_4cat/              # 4분류 split (현행)
+        ├── train.json / val.json / test.json
         └── category_mapping.json
 ```
 
