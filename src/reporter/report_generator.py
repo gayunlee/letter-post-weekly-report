@@ -284,8 +284,8 @@ markdown 불릿 포인트 형식으로 작성해주세요."""
             else:
                 general_contents.append(f"[{cat}] {text}")
 
-        # 일반 콘텐츠 (최대 15개)
-        general_str = "\n".join(general_contents[:15])
+        # 일반 콘텐츠 (최대 30개)
+        general_str = "\n".join(general_contents[:30])
 
         # 서비스 피드백 + 불편사항 + 제보/건의 합쳐서 전달
         all_feedback = []
@@ -322,45 +322,37 @@ markdown 불릿 포인트 형식으로 작성해주세요."""
 - "커뮤니티 활성화", "소통 강화", "긍정적 분위기" 등 추상적·미사여구 표현 금지.
 - 테마 제목은 실제 데이터 내용을 반영하는 구체적인 제목으로 작성 (예: "수익인증 요구 및 투명성 논란", "3기 오프라인 전우회 참여 후기")
 - 인용문은 원문 그대로 사용. 요약하거나 다듬지 말 것.
-- 건수를 표기할 때는 데이터에서 실제 세어서 표기할 것.
+- 건수를 추정하거나 표기하지 말 것. 테마 제목에 건수를 넣지 말 것.
 
 1. **summary**: 한 줄 요약. 데이터에 기반한 팩트 중심으로 작성. (예: "편지 수는 감소했으나, 포트폴리오 구성과 종목 관련 질문이 중심인 주간입니다.")
 
 2. **main_content**: 주요 내용을 테마별로 정리 (2-4개 테마)
    - 비슷한 내용끼리 묶어서 테마로 구성
-   - 테마 제목 뒤에 해당 건수 표기 (약 N건)
-   - 각 테마마다 1-2문장 요약 + 대표 인용문 1개
-   반드시 아래 형식을 따라주세요:
+   - 각 테마마다 2-3문장으로 충분히 설명하고, 맥락과 배경을 포함할 것
+   - 대표 인용문은 가장 핵심적인 원문을 그대로 사용 (긴 인용 OK)
+   - 데이터에 나온 내용을 충실히 반영하되, 다양한 주제를 빠짐없이 커버할 것
+   - 테마 제목은 구체적으로 (예: "이란-미국 전쟁과 예측 신뢰성 논쟁", "커뮤니티 내 갈등 심화")
+   반드시 아래 형식의 문자열로 작성해주세요. 각 테마 사이에 반드시 빈 줄(\\n\\n)을 넣어주세요:
 
-**1. [구체적 테마 제목] (약 N건)**
-
-[테마에 대한 1-2문장 팩트 요약]
-
-> _"대표적인 원문 인용 1"_
+**1. 구체적 테마 제목**\\n\\n테마에 대한 2-3문장 상세 설명. 어떤 맥락에서 이런 반응이 나왔는지, 이용자들의 입장은 어떤지 구체적으로 서술.\\n\\n> _"대표적인 원문 인용 (가능하면 2-3문장 길이)"_\\n\\n\\n**2. 구체적 테마 제목**\\n\\n테마에 대한 2-3문장 상세 설명.\\n\\n> _"대표적인 원문 인용"_
 
 
-**2. [구체적 테마 제목] (약 N건)**
-
-[테마에 대한 1-2문장 팩트 요약]
-
-> _"대표적인 원문 인용 2"_
-
-
-3. **service_feedback**: 서비스 피드백 (서비스 관련 내용이 있을 경우에만, 불릿 포인트로 정리)
+3. **service_feedback**: 서비스 피드백 (하나의 문자열로 작성)
    - 서비스 관련 내용이 없으면 "- 서비스 관련 피드백 없음"으로 작성
    - 있으면 불릿 포인트로 간결하게 정리하고 대표 인용문 1개 첨부
 
-4. **checkpoints**: 체크 포인트 (운영 관점에서 실제 대응이 필요한 사항만, 불릿 포인트로 1-3개)
+4. **checkpoints**: 체크 포인트 (하나의 문자열로 작성, 불릿 포인트 1-3개)
    - 실제 데이터에서 드러난 이슈만 기재. 일반론적 권고사항은 넣지 말 것.
    - 대응이 필요한 사항이 없으면 "- 특이사항 없음"으로 작성
 
-JSON 형식으로 응답해주세요:
-{{"summary": "...", "main_content": "...", "service_feedback": "...", "checkpoints": "..."}}"""
+## 응답 형식
+반드시 JSON 객체로 응답하되, 모든 값은 문자열(string)이어야 합니다. 리스트나 배열을 사용하지 마세요.
+{{"summary": "문자열", "main_content": "문자열", "service_feedback": "문자열", "checkpoints": "문자열"}}"""
 
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
-                max_tokens=1500,
+                max_tokens=3000,
                 temperature=0.3,
                 messages=[
                     {"role": "user", "content": prompt}
@@ -376,12 +368,39 @@ JSON 형식으로 응답해주세요:
             # JSON 블록 추출
             json_match = re.search(r'\{[\s\S]*\}', response_text)
             if json_match:
-                result = json.loads(json_match.group())
+                json_str = json_match.group()
+                try:
+                    result = json.loads(json_str)
+                except json.JSONDecodeError:
+                    # 이스케이프 안 된 줄바꿈/따옴표 정리 후 재시도
+                    json_str = json_str.replace('\n', '\\n').replace('\r', '\\r')
+                    # 이중 이스케이프 방지
+                    json_str = json_str.replace('\\\\n', '\\n').replace('\\\\r', '\\r')
+                    result = json.loads(json_str)
+
+                def _to_markdown(value):
+                    """리스트/딕셔너리를 마크다운 문자열로 변환"""
+                    if isinstance(value, str):
+                        return value
+                    if isinstance(value, list):
+                        parts = []
+                        for item in value:
+                            if isinstance(item, dict):
+                                # {'title': ..., 'summary': ..., 'quote': ...} 형태
+                                title = item.get('title', '')
+                                summary = item.get('summary', '')
+                                quote = item.get('quote', '')
+                                parts.append(f"**{title}**\n\n{summary}\n\n> {quote}\n")
+                            else:
+                                parts.append(str(item))
+                        return "\n".join(parts)
+                    return str(value)
+
                 return {
-                    "summary": result.get("summary", "분석 결과 없음"),
-                    "main_content": result.get("main_content", "- 분석 결과 없음"),
-                    "service_feedback": result.get("service_feedback", "- 서비스 피드백 없음"),
-                    "checkpoints": result.get("checkpoints", "- 특이사항 없음")
+                    "summary": _to_markdown(result.get("summary", "분석 결과 없음")),
+                    "main_content": _to_markdown(result.get("main_content", "- 분석 결과 없음")),
+                    "service_feedback": _to_markdown(result.get("service_feedback", "- 서비스 피드백 없음")),
+                    "checkpoints": _to_markdown(result.get("checkpoints", "- 특이사항 없음"))
                 }
 
         except Exception as e:
