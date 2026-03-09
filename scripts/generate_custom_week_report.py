@@ -62,7 +62,7 @@ def generate_week_data(start_date, end_date, data_store, master_info=None):
     client_for_boards = BigQueryClient()
     board_to_master_query = f"""
     SELECT _id as boardId, masterId
-    FROM `{client_for_boards.project_id}.us_plus.postboards`
+    FROM `{client_for_boards.project_id}.us_plus_new.postboards`
     """
     board_to_master = {b['boardId']: b['masterId']
                        for b in client_for_boards.execute_query(board_to_master_query)}
@@ -94,13 +94,13 @@ def generate_week_data(start_date, end_date, data_store, master_info=None):
 
 
 def main():
-    # 대상 주간 (2월 23일 ~ 3월 1일)
-    target_start = "2026-02-23"
-    target_end = "2026-03-02"  # 3-1 다음날까지 (exclusive)
+    # 대상 주간 (3월 2일 ~ 3월 8일)
+    target_start = "2026-03-02"
+    target_end = "2026-03-09"  # 3-8 다음날까지 (exclusive)
 
-    # 전주 (2월 16일 ~ 2월 22일)
-    prev_start = "2026-02-16"
-    prev_end = "2026-02-23"
+    # 전주 (2월 23일 ~ 3월 1일)
+    prev_start = "2026-02-23"
+    prev_end = "2026-03-02"
 
     print("="*60)
     print("📊 특정 주간 리포트 생성")

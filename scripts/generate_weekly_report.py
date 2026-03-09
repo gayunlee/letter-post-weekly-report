@@ -118,7 +118,7 @@ def main():
         # 게시판 -> 마스터 매핑 조회
         board_to_master_query = f"""
         SELECT _id as boardId, masterId
-        FROM `{client.project_id}.us_plus.postboards`
+        FROM `{client.project_id}.us_plus_new.postboards`
         """
         board_to_master = {b['boardId']: b['masterId']
                            for b in client.execute_query(board_to_master_query)}
