@@ -64,12 +64,46 @@
 
 상세: `decisions/2026-03-02-v3-4cat-merge.md`
 
+### 데이터 누수 발견 + 클린 재학습
+
+**문제**: Golden set 102건이 labeled_all.json과 100% 중복.
+66건이 Train set에 포함 → Golden 정확도 86.3%는 부풀려진 수치.
+
+**원인**: Golden set과 labeled_all.json이 같은 BigQuery 풀에서 추출되었고,
+Opus 4.6이 두 세션에서 같은 텍스트를 다르게 라벨링 (24건/23.5% 불일치).
+
+**대응**: Golden 102건을 제외한 클린 split 생성 + 재학습
+
+| 데이터셋 | 오염 split (topic_4cat/) | 클린 split (topic_4cat_clean/) |
+|---------|------------------------|-------------------------------|
+| Train | 3,740 (golden 66건 포함) | 3,670 (golden 제외) |
+| Val | 496 | 489 |
+| Test | 744 | 735 |
+
+### 벤치마크 결과 (클린 모델, 유효)
+
+| 지표 | 오염 모델 | 클린 모델 | 비고 |
+|------|----------|----------|------|
+| Test 정확도 | 93.3% | 91.4% | -1.9%p (누수 효과) |
+| Golden 정확도 | 86.3% | **83.3%** | -3.0%p (최초 유효 측정) |
+| v2 대비 | +17.0%p | **+14.0%p** | v2=69.3% |
+
+**카테고리별 Golden 정확도 (클린 모델):**
+| 카테고리 | 정확도 | 건수 |
+|---------|--------|------|
+| 서비스 피드백 | 100.0% | 2/2 |
+| 콘텐츠·투자 | 91.0% | 61/67 |
+| 운영 피드백 | 70.6% | 12/17 |
+| 기타 | 62.5% | 10/16 |
+
 ### 소수 카테고리 보정 파이프라인
 
-4분류 KcBERT(Test 93.3%, Golden 80.4%)의 잔존 오분류 구조:
-- **기타↔콘텐츠·투자 혼동 ~56%**: LLM 보정으로 해결 불가 (분류 체계 자체의 경계 모호성)
-- **소수 카테고리→다수 클래스 흡수 ~20%**: LLM 보정 대상
-- **기타 ~24%**
+잔존 오분류 17건의 구조:
+- **기타↔콘텐츠·투자 경계**: 5건 — 분류 체계 모호성, 재학습 필요
+- **콘텐츠·투자→운영 피드백 과보정**: 4건 — 클린 모델이 소수 카테고리를 더 적극 예측
+- **운영→콘텐츠·투자 흡수**: 3건 — LLM 보정 대상 (top2=운영 피드백)
+- **운영↔서비스 경계**: 2건 — 분류 체계 개선 필요
+- **기타**: 3건
 
 ```
 KcBERT 4분류 → [보정] LLM 재검증 (top2가 소수 카테고리인 건만) → 캐시 저장
@@ -84,13 +118,46 @@ KcBERT 4분류 → [보정] LLM 재검증 (top2가 소수 카테고리인 건만
 - Haiku에게 binary 질문: "콘텐츠·투자인가, [운영/서비스 피드백]인가?"
 - confidence ≥ 0.6일 때만 보정
 - detail_tags 추출과 독립적으로 동작 (classification의 top2만 사용)
-- 벤치마크 미실행 상태 (API 장애)
+- **시뮬레이션 결과**: 83.3% → ~86.3% (+3.0%p, 3건 개선) — API 장애로 실측 미완
 
-**Golden set 사람 검수 (완료)**
-- Opus 4.6 라벨링 오류 7/16건 발견 (기타 카테고리 집중)
-- 수정 후 Golden 정확도: 77.5% → 80.4% (+2.9%p, 모델 변경 없이)
+**Golden set 사람 검수 (완료, 2라운드)**
+- 1차: Opus 오라벨링 7건 수정 (기타 카테고리 집중)
+- 2차: 추가 6건 수정 (운영↔콘텐츠·투자 경계)
+- 총 13건 수정 → 정답 분포: 콘텐츠·투자 67, 운영 피드백 17, 기타 16, 서비스 피드백 2
 - 교훈: 같은 모델(Opus)로 재검수는 무의미 → 사람 검수 필수
 - `v5_golden_set.json`에 `v4_topic` 필드 추가
+
+## 학습/평가 데이터 분리 원칙
+
+### 문제 발견
+
+v3c 편향 모델(5,962건)의 Golden set 227건 벤치마크에서 **74건이 학습 데이터에 포함**되어 있었음.
+
+**오염 경위:**
+```
+T1. labeled_all_v3c.json (5,962건) 생성 — 02-02, 02-09 주차 데이터
+T2. prepare_v3_training_data.py → train/val/test split (golden 제외 없이)
+T3. train_v3_topic.py → v5_golden_set.json(102건) leak check → 통과
+T4. v6_golden_set.json 생성 — 125건 auto 샘플링 (labeled_all에서!)
+    → 74건이 이미 T2에서 train/val/test에 들어간 상태
+    → T3의 leak check는 v5만 봄 → 미감지
+```
+
+**오염 영향:**
+- 오염 74건 정확도: 74.3% (외운 데이터)
+- 클린 51건 정확도: **56.9%** (진짜 미지 데이터)
+- 사람검수 102건: 85.3% (유일한 신뢰 수치)
+
+### 이중 방어 구조
+
+1. **1차 방어 (prepare)**: `prepare_v3_training_data.py`가 split 전에 `gold_dataset/*_golden_set.json` 전체를 로드하여 텍스트 매칭으로 제외
+2. **2차 방어 (train)**: `train_v3_topic.py`가 학습 시작 전 `gold_dataset/*_golden_set.json` 전체와 대조하여 누수 감지 시 즉시 중단
+
+### Golden set 관리 규칙
+
+- Golden set = 고정된 평가 전용 데이터. 학습 데이터에 절대 포함 불가
+- Golden set 확장 시: 학습 데이터 풀이 아닌 **별도 소스**에서 샘플링
+- 하드코딩 경로 금지 — `gold_dataset/` 디렉토리 내 `*_golden_set.json` glob으로 자동 참조
 
 ## 코드 구조
 
@@ -125,24 +192,26 @@ scripts/
 
 models/v3/
 ├── topic/final_model/           # 5분류 KcBERT (비교 기준, 보존)
-└── topic_4cat/final_model/      # 4분류 KcBERT (현행)
+├── topic_4cat/final_model/      # 4분류 KcBERT (오염 — golden 66건 포함)
+└── topic_4cat_clean/final_model/ # 4분류 KcBERT (클린 — golden 제외, 현행)
 
 data/
 ├── vectorstore_v3/              # 벡터 KNN 인덱스 (ChromaDB, S3 동기화)
 ├── gold_dataset/
 │   ├── v3_golden_set.json       # 초기 4분류 golden set (52건, 참고용)
-│   └── v5_golden_set.json       # 5분류 golden set (102건, 4분류 평가에도 사용)
+│   ├── v5_golden_set.json       # 5분류 golden set (102건, 사람 검수 완료)
+│   └── v6_golden_set.json       # v3c 5분류 golden set (227건 = 102 검수 + 125 auto)
 ├── classified_data_v3/          # v3 분류 결과 캐시 (주간별 JSON)
 ├── channel_io/                  # 채널톡 데이터
 │   └── channel_items_for_labeling.json
 └── training_data/v3/
-    ├── labeled_all.json         # Opus 4.6 라벨링 결과 (5,962건)
-    ├── topic/                   # 5분류 split (비교 기준)
-    │   ├── train.json / val.json / test.json
-    │   └── category_mapping.json
-    └── topic_4cat/              # 4분류 split (현행)
-        ├── train.json / val.json / test.json
-        └── category_mapping.json
+    ├── labeled_all.json         # Opus 4.6 라벨링 결과 (5,962건, v3 5분류)
+    ├── labeled_all_v3c.json     # v3c 5분류 라벨링 결과 (5,962건)
+    ├── topic/                   # v3 5분류 split (비교 기준)
+    ├── topic_4cat/              # 4분류 split (오염 — golden 포함, 폐기)
+    ├── topic_4cat_clean/        # 4분류 split (클린 — golden 제외)
+    ├── topic_v3c/               # v3c 5분류 split (오염 — golden 미제외)
+    └── topic_v3c_clean/         # v3c 5분류 split (클린 — golden 제외, 현행)
 ```
 
 ### 로컬 파인튜닝 + 서버 배포 흐름

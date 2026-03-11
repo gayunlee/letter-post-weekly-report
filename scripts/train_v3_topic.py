@@ -120,6 +120,44 @@ def main():
 
     print(f"\n  Train: {len(train_data)}, Val: {len(val_data)}, Test: {len(test_data)}")
 
+    # Golden set 데이터 누수 검사 (gold_dataset/ 내 모든 golden set 파일)
+    golden_dir = project_root / "data" / "gold_dataset"
+    golden_texts = set()
+    golden_file_count = 0
+    if golden_dir.exists():
+        for gf in sorted(golden_dir.glob("*_golden_set.json")):
+            with open(gf, encoding="utf-8") as f:
+                items = json.load(f)
+            for item in items:
+                golden_texts.add(item["text"].strip())
+            golden_file_count += 1
+            print(f"    {gf.name}: {len(items)}건")
+
+    if golden_texts:
+        print(f"  Golden set 누수 검사: {len(golden_texts)}건 대상 ({golden_file_count}개 파일)")
+
+        leaks = {"train": 0, "val": 0, "test": 0}
+        for name, dataset in [("train", train_data), ("val", val_data), ("test", test_data)]:
+            for item in dataset:
+                if item["text"].strip() in golden_texts:
+                    leaks[name] += 1
+
+        total_leaks = sum(leaks.values())
+        if total_leaks > 0:
+            print(f"\n  ⚠ Golden set 데이터 누수 감지!")
+            print(f"    Golden {len(golden_texts)}건 중 학습 데이터와 중복:")
+            for name, count in leaks.items():
+                if count > 0:
+                    print(f"      {name}: {count}건")
+            raise ValueError(
+                f"Golden set과 학습 데이터가 {total_leaks}건 중복됩니다. "
+                f"prepare_v3_training_data.py --golden-dir로 golden set을 제외한 데이터로 split하세요."
+            )
+        else:
+            print(f"  Golden set 누수 검사: 통과 (중복 0건)")
+    else:
+        print(f"  Golden set 누수 검사: golden set 파일 없음 ({golden_dir})")
+
     # 모델 & 토크나이저
     print(f"  모델: {MODEL_NAME}")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)

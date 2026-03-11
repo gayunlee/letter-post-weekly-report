@@ -22,32 +22,48 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-V3_TOPICS = ["운영 피드백", "서비스 피드백", "콘텐츠 반응", "투자 담론", "기타"]
+V3_TOPICS = ["운영 피드백", "서비스 피드백", "콘텐츠·투자", "일상·감사", "기타"]
 
 CLASSIFY_PROMPT = """당신은 금융 교육 플랫폼의 VOC 데이터 분류기입니다.
 
-## 분류 기준
+## 분류 우선순위 (위에서 아래로 판별, 먼저 해당되면 확정)
 
-| 카테고리 | 기준 | 예시 |
-|---------|------|------|
-| 운영 피드백 | 운영팀/사업팀이 사람 대 사람으로 처리 | 세미나 문의, 환불 요청, 멤버십 문의, 배송, 가격 정책 질문 |
-| 서비스 피드백 | 개발팀이 시스템 수정 필요 | 앱 크래시, 결제 오류(시스템), 로그인 실패, 기능 요청, 사칭 제보 |
-| 콘텐츠 반응 | 마스터/콘텐츠가 주된 대상 | 강의 후기, 마스터 칭찬/불만, 콘텐츠 품질 의견, 리포트 반응 |
-| 투자 담론 | 시장/종목/투자전략이 주된 대상 | 투자 질문, 수익/손실 공유, 시장 분석, 종목 토론, 매매 타이밍 |
-| 기타 | 분류 불필요 | 새해 인사, 안부, 축하, 테스트 글 |
+### 1순위: 운영 피드백
+운영팀/사업팀이 사람 대 사람으로 처리할 요청·이슈.
+예: 세미나 문의, 환불 요청, 멤버십 가입/해지 문의, 배송, 가격 정책 질문, 구독 관련 민원
 
-## 경계 판별
-- 시스템 장애/버그 → 서비스 피드백
-- 정책/프로세스/인력 대응 → 운영 피드백
-- 마스터/콘텐츠가 주된 대상 → 콘텐츠 반응
-- 시장/종목/투자가 주된 대상 → 투자 담론
-- 인사/잡담 → 기타
+### 2순위: 서비스 피드백
+개발팀이 시스템을 수정해야 하는 기술적 이슈·요청.
+예: 앱 크래시, 결제 오류(시스템), 로그인 실패, 기능 요청, 사칭 제보, 링크 오류
+
+### 3순위: 콘텐츠·투자 ⭐ 가장 넓은 범위
+투자/콘텐츠/마스터/시장/종목과 **조금이라도** 관련된 모든 글.
+아래 신호가 **하나라도** 있으면 무조건 콘텐츠·투자:
+- 종목명, 섹터, ETF, 지수, 코인 언급
+- 수익/손실/매수/매도/포트폴리오/리밸런싱
+- 마스터의 분석/강의/뷰/관점에 대한 반응 (칭찬이든 비판이든)
+- 시장 상황, 거시경제, 금리, 환율 언급
+- "강의 잘 들었습니다", "덕분에 공부했습니다" 등 학습 언급
+- 멤버십 불만이지만 콘텐츠 품질이 이유인 경우
+
+### 4순위: 일상·감사
+위 1~3순위에 **전혀** 해당하지 않는 순수 인사·감사·안부·응원·격려·잡담.
+투자/콘텐츠 신호가 **0개**일 때만 해당.
+예: "감사합니다 명절 잘 보내세요", "힘내세요", 날씨 이야기, MBTI, 자기소개
+
+### 5순위: 기타
+무의미 노이즈, 분류 불가. 예: ".", "1", "?", 자음만, 테스트 글
+
+## 핵심 규칙
+- 감사/응원 + 투자 신호 → **콘텐츠·투자** (3순위 우선)
+- 감사/응원만, 투자 신호 0개 → **일상·감사** (4순위)
+- 애매하면 → **콘텐츠·투자** (투자 교육 커뮤니티이므로 콘텐츠·투자가 기본값)
 
 ## 마스터란?
 투자 교육 커뮤니티를 운영하는 금융 콘텐츠 크리에이터입니다.
 
 ## 응답: JSON만 출력
-{"topic": "콘텐츠 반응", "confidence": 0.92}"""
+{"topic": "콘텐츠·투자", "confidence": 0.92}"""
 
 OUTPUT_DIR = "./data/training_data/v3"
 
@@ -77,7 +93,7 @@ def load_existing_data(data_dir: str) -> list:
 
 def classify_single(client: Anthropic, model: str, text: str) -> dict:
     """단일 건 v3 분류"""
-    if not text or len(text.strip()) < 10:
+    if not text or len(text.strip()) < 3:
         return {"topic": "기타", "confidence": 1.0}
     try:
         response = client.messages.create(
@@ -118,14 +134,14 @@ def load_progress(output_path: str) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="v3 분류 체계 LLM 라벨링")
-    parser.add_argument("--model", default="claude-haiku-4-5-20251001")
+    parser.add_argument("--model", default="claude-opus-4-6")
     parser.add_argument("--max-workers", type=int, default=5)
     parser.add_argument("--dry-run", action="store_true", help="비용만 추정")
     args = parser.parse_args()
 
     data_dir = "./data/classified_data_two_axis"
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    output_path = os.path.join(OUTPUT_DIR, "labeled_all.json")
+    output_path = os.path.join(OUTPUT_DIR, "labeled_all_v3b.json")
 
     # 데이터 로드
     print("=" * 70)
