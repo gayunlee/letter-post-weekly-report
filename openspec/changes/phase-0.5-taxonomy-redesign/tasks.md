@@ -194,80 +194,49 @@ make push   # models/v3/ 업로드
 - [x] KcBERT 한계 결론 — 모델 용량(110M) 문제, 데이터 문제 아님
 - [x] 디스틸레이션 전략 의사결정 문서 작성
 
-## 진행 중 — LLM 디스틸레이션 (Phase 0.5b)
+## 폐기 — LLM 디스틸레이션 (Phase 0.5b)
 
-**목표**: Opus 라벨로 저렴한 모델 파인튜닝 → Golden 90%+
-**핵심 발견**: 불균형 데이터(콘텐츠·투자 87.9%) 파인튜닝은 zero-shot보다 나빠질 수 있음
-**환경**: Vertex AI (1차) + OpenAI (2차 백업)
-**상세**: `decisions/2026-03-09-model-distillation-strategy.md`
+> 3분류 전환 + 기계적 매핑으로 대체. Vertex AI FT 접근 폐기.
+> - Gemini Flash FT 63.4%: 불균형 데이터 FT < zero-shot 확인
+> - EXAONE/Solar: GPU 대기 중 폐기
+> - 대안: 기존 v3c 라벨 기계적 매핑 ($0) + 로컬 Gemma LoRA
 
-### 데이터 준비 ✅
-- [x] Golden 227건 제외 clean split — `topic_v3c_full_clean/` (train 10,641 / val 1,416)
-- [x] Gemini FT용 JSONL — `vertex_ai/gemini_ft_{train,val}.jsonl`
-- [x] EXAONE/Solar SFT용 JSONL (불균형) — `vertex_ai/sft_{train,val}.jsonl`
-- [x] `scripts/prepare_vertex_training_data.py` — 포맷 변환 스크립트
+## 진행 중 — 3분류 로컬 파인튜닝
 
-### Vertex AI 환경 세팅 ✅
-- [x] GCP 프로젝트: `us-service-data`, 리전: `us-central1`
-- [x] ADC 인증: `~/.config/gcloud/legacy_credentials/gayunlee11@us-all.co.kr/adc.json`
-- [x] GCS 버킷: `gs://us-service-data-vertex-ft` (Gemini), `gs://us-service-data-vertex-ft-us` (EXAONE/Solar)
-- [x] 스크립트: `check_vertex_jobs.py`, `monitor_vertex_jobs.py`, `benchmark_vertex_models.py`
+### 완료
+- [x] 프롬프트 최적화: 93.9% (R5, Haiku 4.5, golden 197건)
+- [x] Golden set v8 확정 (197건, 3분류)
+- [x] 학습 데이터 준비: v3c→3class 기계적 매핑 + 경계 검수
+- [x] `data/training_data/v3/train_3class.json` (15,967건)
+- [x] 파인튜닝 모델 선정: Gemma (KcBERT 기각, Qwen 기각)
 
-### Step 1: 불균형 데이터 파인튜닝 (완료/진행 중)
+### Step 0: 학습 데이터 최종 확정
+- [ ] 일상·감사 경계 4건 변경 반영
+- [ ] Gemma 학습용 데이터 포맷 변환 (text + label)
+- [ ] Golden set 벤치마크용 데이터 준비
 
-1차 실험 — 불균형 데이터 그대로 3모델 동시 제출
+### Step 1: Zero-shot 테스트
+- [ ] Gemma 3 1B zero-shot → golden 197건 벤치마크
+- [ ] 결과 기록 → 기본 능력 판단
 
-- [x] Gemini 2.5 Flash FT 제출 → **SUCCEEDED**
-- [x] Gemini FT 벤치마크: **63.4%** (144/227) — zero-shot Haiku 78.9%보다 낮음
-  - 원인: 콘텐츠·투자 recall 0.95가 다른 카테고리 흡수, 기타 recall 0.10
-  - **불균형 파인튜닝이 zero-shot보다 나빠지는 것 확인**
-- [ ] EXAONE 3.5 7.8B LoRA — PENDING (GPU 대기)
-- [ ] Solar 10.7B LoRA — PENDING (GPU 대기)
+### Step 2: 소량 LoRA FT (1,000건)
+- [ ] 학습 스크립트 작성 (Gemma LoRA, MPS)
+- [ ] 1,000건 1 epoch 학습
+- [ ] Golden 벤치마크 → zero-shot 대비 개선 확인
 
-### Step 2: 균형 데이터 생성 ✅
+### Step 3: 전량 LoRA FT (15,967건)
+- [ ] 전량 3 epoch 학습
+- [ ] Golden 벤치마크 → 목표 93%+
+- [ ] Haiku API 대비 비교
 
-**배경**: KcBERT(110M)에서 균형 샘플링이 효과 없었지만(66.5%), 그건 모델 용량 한계.
-7.8B+ 모델은 맥락 추론 가능 → 균형 데이터 효과 기대.
+### Step 4: 의사결정
+- [ ] 93%+ → 프로덕션 모델 채택, 파이프라인 통합 (Phase 1-3)
+- [ ] 90-93% → 하이퍼파라미터 조정 or 모델 크기 업 (4B)
+- [ ] 90% 미만 → 근본 원인 분석
 
-- [x] `scripts/prepare_balanced_vertex_data.py` 생성
-- [x] 균형 데이터 2종 생성:
+## 대기 (파인튜닝 완료 후)
 
-| 데이터셋 | train | val | 최대 비율 | 설명 |
-|---------|-------|-----|----------|------|
-| 기존 불균형 | 10,641 | 1,416 | 77.5% | 콘텐츠·투자 쏠림 |
-| **balanced_strict** | 1,503 | 167 | 20.4% | 각 ~334건 (1:1 균형) |
-| **balanced_moderate** | 5,295 | 588 | 34.0% | 소수 전량 + 콘텐츠·투자 2,000 |
-
-### Step 3: EXAONE 균형 파인튜닝 (진행 예정)
-
-**전략**: EXAONE 7.8B로 먼저 균형 효과 검증 → 효과 있으면 나머지 모델로 확대
-
-- [ ] EXAONE balanced_strict 파인튜닝 (Vertex AI)
-- [ ] EXAONE balanced_moderate 파인튜닝 (Vertex AI)
-- [ ] 3종 비교 벤치마크 (Golden 227건):
-  - EXAONE 불균형 (Step 1에서 진행 중)
-  - EXAONE balanced_strict
-  - EXAONE balanced_moderate
-- [ ] 균형 효과 판정:
-  - 효과 있음 (best ≥ 80%) → Step 4로
-  - 효과 없음 → 분류 체계 재설계 or 접근법 변경
-
-### Step 4: 최적 데이터로 모델 비교 (Step 3 결과 후)
-
-Step 3에서 가장 좋은 데이터셋으로 나머지 모델도 파인튜닝:
-
-- [ ] Gemini 2.5 Flash FT (균형 데이터)
-- [ ] Solar 10.7B LoRA (균형 데이터)
-- [ ] 3모델 비교 벤치마크 + version_log 기록
-
-### Step 5: 의사결정
-
-- [ ] 90%+ 달성 모델 채택 → 주간 파이프라인 전환
-- [ ] 전부 90% 미달 → 스케일업 (EXAONE 32B / GPT-4.1-mini FT) 또는 분류 체계 재설계
-
-## 대기 (디스틸레이션 완료 후)
-
-- [ ] 채택 모델로 `classify_v3.py` 주간 분류 실행
+- [ ] 채택 모델로 주간 분류 파이프라인 전환
 - [ ] 채널톡 분류 체계 확정 + golden set 생성
 - [ ] 채널톡 파이프라인 (Phase 2)
 
