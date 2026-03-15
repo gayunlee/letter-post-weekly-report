@@ -8,7 +8,7 @@
     cq = ChannelQueryService(client)
     messages = cq.get_weekly_messages("2026-02-09", "2026-02-16")
 """
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from datetime import datetime, timedelta
 from .client import BigQueryClient
 
@@ -115,6 +115,51 @@ class ChannelQueryService:
         ORDER BY message_count DESC
         """
         return self.client.execute_query(query)
+
+    def get_chat_states(self, chat_ids: List[str]) -> Dict[str, str]:
+        """chats 테이블에서 chatId → state 매핑 일괄 조회
+
+        Returns:
+            {chatId: state} 딕셔너리 (state: "closed" / "opened")
+        """
+        if not chat_ids:
+            return {}
+
+        # BigQuery IN 절 최대 크기 제한 고려하여 배치 처리
+        batch_size = 5000
+        result = {}
+        for i in range(0, len(chat_ids), batch_size):
+            batch = chat_ids[i:i + batch_size]
+            ids_str = ", ".join(f"'{cid}'" for cid in batch)
+            query = f"""
+            SELECT id as chatId, state
+            FROM `{self.project_id}.{self.dataset_id}.chats`
+            WHERE id IN ({ids_str})
+            """
+            rows = self.client.execute_query(query)
+            for row in rows:
+                result[row["chatId"]] = row.get("state", "")
+        return result
+
+    def get_weekly_conversations(
+        self, start_date: str, end_date: str
+    ) -> tuple:
+        """messages + chats JOIN으로 메시지와 state 함께 조회
+
+        Returns:
+            (messages, chat_states) 튜플
+            - messages: 메시지 리스트
+            - chat_states: {chatId: state} 딕셔너리
+        """
+        messages = self.get_weekly_messages(start_date, end_date)
+        if not messages:
+            return [], {}
+
+        # 고유 chatId 추출
+        chat_ids = list({msg["chatId"] for msg in messages if msg.get("chatId")})
+        chat_states = self.get_chat_states(chat_ids)
+
+        return messages, chat_states
 
     @staticmethod
     def _kst_to_unix_ms(date_str: str) -> int:
