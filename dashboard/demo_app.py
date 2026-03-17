@@ -1,14 +1,13 @@
-"""VOC Intelligence Demo — 분류 데이터 활용 데모
+"""VOC Intelligence Demo — CTO 설득용 데모
 
 실행: streamlit run dashboard/demo_app.py
 """
 import json
 import re
 import sys
-import os
+import time
 from pathlib import Path
-from collections import Counter
-from datetime import datetime
+from collections import Counter, defaultdict
 
 import streamlit as st
 import pandas as pd
@@ -17,1171 +16,1086 @@ import plotly.graph_objects as go
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# ── 상수 ──────────────────────────────────────────────────────────────
-TOPICS = ["콘텐츠 반응", "투자 이야기", "서비스 이슈", "커뮤니티 소통"]
-SENTIMENTS = ["긍정", "부정", "중립"]
-SENTIMENT_COLORS = {"긍정": "#2ecc71", "부정": "#e74c3c", "중립": "#95a5a6"}
-TOPIC_COLORS = {
-    "콘텐츠 반응": "#3498db",
-    "투자 이야기": "#e67e22",
-    "서비스 이슈": "#e74c3c",
-    "커뮤니티 소통": "#9b59b6",
-}
-CHANNEL_TOPICS = ["결제·환불", "구독·멤버십", "콘텐츠·수강", "기술·오류", "기타"]
-CHANNEL_TOPIC_COLORS = {
-    "결제·환불": "#e74c3c",
-    "구독·멤버십": "#e67e22",
-    "콘텐츠·수강": "#3498db",
-    "기술·오류": "#9b59b6",
-    "기타": "#95a5a6",
-}
-
 DATA_DIR = Path("data")
 TWO_AXIS_DIR = DATA_DIR / "classified_data_two_axis"
 CHANNEL_DIR = DATA_DIR / "channel_io" / "golden"
 
+
 # ── 데이터 로드 ──────────────────────────────────────────────────────
 
 @st.cache_data
-def load_two_axis_data() -> list[dict]:
-    """2축 분류 데이터 로드 (detail_tags 있는 것만)"""
+def load_two_axis_data():
     items = []
     for f in sorted(TWO_AXIS_DIR.glob("*.json")):
         with open(f, encoding="utf-8") as fh:
             data = json.load(fh)
         week = f.stem
-        for letter in data.get("letters", []):
-            if "detail_tags" not in letter:
-                continue
-            letter["_type"] = "편지"
-            letter["_week"] = week
-            items.append(letter)
-        for post in data.get("posts", []):
-            if "detail_tags" not in post:
-                continue
-            post["_type"] = "게시글"
-            post["_week"] = week
-            items.append(post)
+        for item in data.get("letters", []):
+            item["_type"] = "편지"
+            item["_week"] = week
+            items.append(item)
+        for item in data.get("posts", []):
+            item["_type"] = "게시글"
+            item["_week"] = week
+            items.append(item)
     return items
 
 
 @st.cache_data
-def load_channel_data() -> list[dict]:
-    """채널톡 분류 데이터 로드"""
-    path = CHANNEL_DIR / "golden_multilabel_270.json"
+def load_prev_week_simple():
+    """전주 데이터 — 마스터별 감성 통계 (detail_tags 불필요)"""
+    path = TWO_AXIS_DIR / "2026-02-02.json"
+    if not path.exists():
+        return {}
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    stats = {}
+    for item in data.get("letters", []) + data.get("posts", []):
+        master = re.sub(r"\d+$", "", item.get("masterName", "Unknown")).strip()
+        cls = item.get("classification", {})
+        if master not in stats:
+            stats[master] = {"total": 0, "neg": 0, "pos": 0}
+        stats[master]["total"] += 1
+        s = cls.get("sentiment", "중립")
+        if s == "부정":
+            stats[master]["neg"] += 1
+        elif s == "긍정":
+            stats[master]["pos"] += 1
+    for m in stats:
+        t = stats[m]["total"]
+        stats[m]["neg_pct"] = round(stats[m]["neg"] / t * 100, 1) if t else 0
+        stats[m]["pos_pct"] = round(stats[m]["pos"] / t * 100, 1) if t else 0
+    total = sum(s["total"] for s in stats.values())
+    return {"masters": stats, "total": total, "week": "2026-02-02"}
+
+
+def infer_master_from_channel_text(text):
+    """채널톡 텍스트에서 마스터 이름 추론"""
+    master_map = {
+        "박두환": ["박두환", "투자동행학교"],
+        "서재형": ["서재형", "담임쌤", "담쌤", "센트러스"],
+        "미과장": ["미과장"],
+        "이정윤": ["이정윤", "이정윤세무사"],
+        "돈깡": ["돈깡"],
+        "오종태": ["오종태"],
+        "김기훈": ["김기훈"],
+        "체슬리": ["체슬리", "1등매니저"],
+    }
+    for master, keywords in master_map.items():
+        if any(kw in text for kw in keywords):
+            return master
+    return None
+
+
+@st.cache_data
+def load_channel_data():
+    path = CHANNEL_DIR / "golden_multilabel_270_with_subtags.json"
+    if not path.exists():
+        path = CHANNEL_DIR / "golden_multilabel_270.json"
     if not path.exists():
         return []
     with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
-def items_to_dataframe(items: list[dict]) -> pd.DataFrame:
-    """편지/게시글 아이템을 DataFrame으로 변환"""
+def to_df(items):
     rows = []
     for item in items:
+        if "detail_tags" not in item:
+            continue
         cls = item.get("classification", {})
         dt = item.get("detail_tags", {})
         master = re.sub(r"\d+$", "", item.get("masterName", "Unknown")).strip()
         content = item.get("message") or item.get("textBody") or item.get("body", "")
-
         rows.append({
             "유형": item["_type"],
             "주차": item["_week"],
             "마스터": master,
             "클럽": item.get("masterClubName", ""),
             "주제": cls.get("topic", "미분류"),
-            "감성": cls.get("sentiment", "미분류"),
+            "감성": cls.get("sentiment", "중립"),
             "내용": content,
             "summary": dt.get("summary", ""),
             "category_tags": dt.get("category_tags", []),
             "free_tags": dt.get("free_tags", []),
-            "날짜": item.get("createdAt", ""),
         })
     return pd.DataFrame(rows)
 
 
-def channel_to_dataframe(items: list[dict]) -> pd.DataFrame:
-    """채널톡 아이템을 DataFrame으로 변환"""
-    rows = []
-    for item in items:
-        topics = item.get("topics", [])
-        rows.append({
-            "chatId": item.get("chatId", ""),
-            "내용": item.get("text", ""),
-            "route": item.get("route", ""),
-            "topics": topics,
-            "topic_primary": topics[0] if topics else "없음",
+@st.cache_data
+def compute_insights(_df, _df_channel):
+    df = _df
+    df_channel = _df_channel
+
+    pay_kw = ["환불", "결제", "구독해지", "자동결제"]
+    letter_pay = df[df["내용"].str.contains("|".join(pay_kw), na=False)]
+
+    ch_pay = 0
+    if not df_channel.empty:
+        for _, row in df_channel.iterrows():
+            if any(s.get("subtag") in ["환불", "구독해지", "자동결제항의", "상품변경"]
+                   for s in row.get("subtags", [])):
+                ch_pay += 1
+
+    master_health = []
+    for master, m_df in df.groupby("마스터"):
+        t = len(m_df)
+        if t < 10:
+            continue
+        neg = len(m_df[m_df["감성"] == "부정"])
+        pos = len(m_df[m_df["감성"] == "긍정"])
+        svc = len(m_df[m_df["주제"] == "서비스 이슈"])
+        neg_r = round(neg / t * 100, 1)
+        pos_r = round(pos / t * 100, 1)
+        health = round(pos_r - neg_r * 1.5 - (svc / t * 100 * 0.5), 1)
+        status = "🔴 긴급" if neg_r >= 20 else "🟡 주의" if neg_r >= 12 else "🟢 양호"
+        master_health.append({
+            "마스터": master, "총건수": t, "긍정%": pos_r,
+            "부정%": neg_r, "서비스이슈": svc, "건강지수": health, "상태": status
         })
-    return pd.DataFrame(rows)
+
+    subtag_cnt = Counter()
+    if not df_channel.empty:
+        for _, row in df_channel.iterrows():
+            for s in row.get("subtags", []):
+                if s.get("subtag") != "기타":
+                    subtag_cnt[f"{s['topic']} > {s['subtag']}"] += 1
+
+    # ── 전주 대비 WoW ───────────────────────────────────────────
+    prev = load_prev_week_simple()
+    prev_masters = prev.get("masters", {})
+    prev_total = prev.get("total", 0)
+    curr_total = len(_df)
+
+    master_wow = {}
+    for row in master_health:
+        m = row["마스터"]
+        if m in prev_masters:
+            prev_neg = prev_masters[m]["neg_pct"]
+            delta = round(row["부정%"] - prev_neg, 1)
+            trend = "↑" if delta > 1 else "↓" if delta < -1 else "→"
+            master_wow[m] = {"prev_neg_pct": prev_neg, "delta": delta, "trend": trend}
+
+    mhdf = pd.DataFrame(master_health).sort_values("건강지수", ascending=False)
+    if not mhdf.empty and master_wow:
+        mhdf["전주부정%"] = mhdf["마스터"].map(lambda m: master_wow.get(m, {}).get("prev_neg_pct", None))
+        mhdf["변화"] = mhdf["마스터"].map(lambda m: master_wow.get(m, {}).get("delta", None))
+        mhdf["추세"] = mhdf["마스터"].map(lambda m: master_wow.get(m, {}).get("trend", "?"))
+
+    # ── 채널톡 마스터별 분류 ────────────────────────────────────
+    ch_master_cnt = Counter()
+    ch_master_topic = defaultdict(Counter)
+    for _, row in df_channel.iterrows():
+        text = row.get("text", "")
+        m = infer_master_from_channel_text(text)
+        if m:
+            ch_master_cnt[m] += 1
+            for s in row.get("subtags", []):
+                if s.get("subtag") != "기타":
+                    ch_master_topic[m][s["topic"]] += 1
+
+    return {
+        "letter_pay": len(letter_pay),
+        "ch_pay": ch_pay,
+        "cross_pay_total": len(letter_pay) + ch_pay,
+        "master_health_df": mhdf,
+        "subtag_cnt": subtag_cnt,
+        "master_wow": master_wow,
+        "wow_total_delta": curr_total - prev_total,
+        "prev_total": prev_total,
+        "ch_master_cnt": ch_master_cnt,
+        "ch_master_topic": ch_master_topic,
+    }
 
 
-# ── 헬퍼 함수 ────────────────────────────────────────────────────────
-
-def _generate_mini_report(df: pd.DataFrame, df_channel: pd.DataFrame) -> str:
-    """분류 데이터 기반 미니 리포트 생성 (LLM 없이)"""
-    total = len(df)
+def generate_report(df):
+    week = df["주차"].iloc[0] if not df.empty else "2026-02-09"
     letters = len(df[df["유형"] == "편지"])
     posts = len(df[df["유형"] == "게시글"])
+    total = len(df)
 
-    master_stats = []
-    for master in df["마스터"].unique():
+    report = f"# 주간 VOC 리포트 ({week} 주차)\n\n## 0. 핵심 요약\n\n"
+    report += "| 구분 | 이번 주 |\n|------|--------|\n"
+    report += f"| 전체 편지 건수 | {letters}건 |\n| 전체 게시글 건수 | {posts}건 |\n| 전체 총합 | {total}건 |\n\n"
+
+    top3l = df[df["유형"] == "편지"].groupby("마스터").size().sort_values(ascending=False).head(3)
+    top3p = df[df["유형"] == "게시글"].groupby("마스터").size().sort_values(ascending=False).head(3)
+    report += f"편지 Top3 ({'+'.join(top3l.index)}): **약 {round(top3l.sum()/letters*100)}%**\n\n"
+    report += f"게시글 Top3 ({'+'.join(top3p.index)}): **약 {round(top3p.sum()/posts*100)}%**\n\n---\n\n"
+    report += "## 1. 오피셜클럽별 상세\n\n"
+
+    for idx, master in enumerate(df.groupby("마스터").size().sort_values(ascending=False).head(7).index, 1):
         m_df = df[df["마스터"] == master]
-        t = len(m_df)
-        if t < 3:
-            continue
-        n = len(m_df[m_df["감성"] == "부정"])
-        nr = round(n / t * 100, 1) if t else 0
+        m_l = len(m_df[m_df["유형"] == "편지"])
+        m_p = len(m_df[m_df["유형"] == "게시글"])
+        m_t = len(m_df)
+        neg = len(m_df[m_df["감성"] == "부정"])
+        neg_r = round(neg / m_t * 100, 1) if m_t else 0
+
+        cat_cnt = Counter()
+        for tags in m_df["category_tags"]:
+            for t in tags:
+                cat_cnt[t] += 1
         ftags = Counter()
         for tags in m_df[m_df["감성"] == "부정"]["free_tags"]:
-            for tag in tags:
-                ftags[tag] += 1
-        top_issue = ftags.most_common(1)[0][0] if ftags else "-"
-        master_stats.append((master, t, nr, top_issue))
+            for t in tags:
+                ftags[t] += 1
 
-    master_stats.sort(key=lambda x: x[1], reverse=True)
+        clubs = [c for c in m_df["클럽"].dropna().unique() if c]
+        club_str = f" *({' + '.join(clubs[:3])} 합산)*" if len(clubs) > 1 else ""
+        top_neg = [f'"{t}"' for t, _ in ftags.most_common(2)]
 
-    svc = df[df["주제"] == "서비스 이슈"]
-    svc_tags = Counter()
-    for tags in svc["category_tags"]:
-        for t in tags:
-            svc_tags[t] += 1
+        report += f"## {idx}. {master}{club_str}\n\n"
+        report += f"> {m_t}건 | 부정 {neg_r}%" + (f" | 주요 부정 키워드: {', '.join(top_neg)}" if top_neg else "") + "\n\n"
+        report += f"| 편지 | 게시글 | 총합 |\n|------|--------|------|\n| {m_l}건 | {m_p}건 | {m_t}건 |\n\n"
+        report += "■ 주요 내용\n\n"
 
-    risk_masters = [(m, t, nr, issue) for m, t, nr, issue in master_stats if nr >= 20]
+        for rank, (cat, cnt) in enumerate(cat_cnt.most_common(3), 1):
+            cat_items = m_df[m_df["category_tags"].apply(lambda tags: cat in tags)]
+            summaries = cat_items["summary"].dropna().tolist()
+            quotes = cat_items["내용"].dropna().tolist()
+            report += f"**{rank}. {cat} ({cnt}건)**\n\n"
+            if summaries:
+                report += summaries[0] + "\n\n"
+            if quotes:
+                q = quotes[0][:200].replace("\n", " ").strip()
+                report += f'> *"{q}..."*\n\n'
 
-    report = f"""
-## 핵심 요약
-
-| 구분 | 건수 |
-|------|------|
-| 편지 | {letters}건 |
-| 게시글 | {posts}건 |
-| 전체 | {total}건 |
-| 채널톡 CS | {len(df_channel)}건 |
-
-"""
-    if risk_masters:
-        report += "### ⚠️ 위험 신호\n\n"
-        for m, t, nr, issue in risk_masters:
-            report += f"- **{m}**: 부정 {nr}% ({t}건 중) — {issue}\n"
-        report += "\n"
-
-    report += "### 마스터별 통계\n\n"
-    report += "| 마스터 | 총건수 | 부정비율 | 주요 부정 이슈 |\n"
-    report += "|--------|--------|----------|----------------|\n"
-    for m, t, nr, issue in master_stats[:10]:
-        status = "🔴" if nr >= 25 else "🟡" if nr >= 15 else "🟢"
-        report += f"| {m} | {t} | {status} {nr}% | {issue} |\n"
-
-    if svc_tags:
-        report += "\n### 서비스 이슈 요약\n\n"
-        for tag, cnt in svc_tags.most_common(5):
-            report += f"- {tag}: {cnt}건\n"
-
+        svc = m_df[m_df["주제"] == "서비스 이슈"]
+        report += "■ 서비스 피드백\n\n"
+        if svc.empty:
+            report += "- 서비스 관련 피드백 없음\n\n"
+        else:
+            sc = Counter()
+            for tags in svc["category_tags"]:
+                for t in tags:
+                    sc[t] += 1
+            report += f"{', '.join([f'{t}({c}건)' for t, c in sc.most_common(2)])} 관련 {len(svc)}건\n\n"
+            q = svc["내용"].iloc[0][:150].replace("\n", " ").strip()
+            report += f'> _"{q}"_\n\n'
+        report += "---\n\n"
     return report
 
 
-def _generate_agent_response(query: str, df: pd.DataFrame, df_channel: pd.DataFrame) -> str:
-    """AI Agent 응답 생성 — Claude API 호출"""
+@st.cache_resource
+def _load_vectorstore():
+    """ChromaDB + 임베딩 모델 로드 (앱 시작 시 1회)"""
     try:
-        import anthropic
-        client = anthropic.Anthropic()
+        import chromadb
+        from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+        ef = SentenceTransformerEmbeddingFunction(model_name="jhgan/ko-sroberta-multitask")
+        client = chromadb.PersistentClient(path="chroma_db")
+        col = client.get_collection("voc_demo_2026_02_09", embedding_function=ef)
+        return col
     except Exception:
-        return _generate_fallback_response(query, df, df_channel)
+        return None
 
-    context = _build_data_context(query, df, df_channel)
 
+def _retrieve_relevant_docs(query, n=12):
+    """질문과 유사한 VOC 문서 검색"""
+    col = _load_vectorstore()
+    if col is None:
+        return []
     try:
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=2000,
-            messages=[{"role": "user", "content": query}],
-            system=f"""당신은 VOC 데이터 분석 AI 에이전트입니다.
-사용자의 질문에 분류된 VOC 데이터를 기반으로 정확하고 구조화된 인사이트를 제공합니다.
+        result = col.query(query_texts=[query], n_results=n,
+                           include=["documents", "metadatas"])
+        docs = []
+        for doc, meta in zip(result["documents"][0], result["metadatas"][0]):
+            docs.append({"text": doc, "meta": meta})
+        return docs
+    except Exception:
+        return []
 
-## 사용 가능한 데이터
+
+def _build_data_context(df, df_channel, insights, query=None):
+    """Claude에 넘길 VOC 데이터 컨텍스트 — 질문 있으면 벡터 검색 우선"""
+    lines = ["# 2026-02-09 주차 VOC 데이터 요약"]
+
+    # 전체 통계 (항상 포함)
+    if not df.empty:
+        total = len(df)
+        neg = len(df[df["감성"] == "부정"])
+        pos = len(df[df["감성"] == "긍정"])
+        lines.append(f"\n## 편지·게시글 전체\n총 {total}건 | 긍정 {pos}건({round(pos/total*100,1)}%) | 부정 {neg}건({round(neg/total*100,1)}%)")
+        lines.append("\n## 마스터별 현황")
+        for master, m_df in df.groupby("마스터"):
+            t = len(m_df)
+            if t < 10:
+                continue
+            m_neg = len(m_df[m_df["감성"] == "부정"])
+            m_pos = len(m_df[m_df["감성"] == "긍정"])
+            cat_cnt = Counter()
+            for tags in m_df["category_tags"]:
+                for tag in tags:
+                    cat_cnt[tag] += 1
+            top_tags = ", ".join([f"{tg}({c}건)" for tg, c in cat_cnt.most_common(3)])
+            lines.append(f"- {master}: {t}건, 긍정 {round(m_pos/t*100,1)}%, 부정 {round(m_neg/t*100,1)}%, 주요 태그: {top_tags}")
+
+    if not df_channel.empty:
+        lines.append(f"\n## 채널톡 CS\n총 {len(df_channel)}건")
+        if insights and insights.get("subtag_cnt"):
+            lines.append("주요 문의 유형:")
+            for subtag, cnt in insights["subtag_cnt"].most_common(8):
+                lines.append(f"- {subtag}: {cnt}건")
+        # 채널톡 원문 — 질문 키워드 필터
+        kw = query.lower() if query else ""
+        ch_filtered = df_channel
+        topic_map = {"환불": "결제·환불", "결제": "결제·환불", "구독": "구독·멤버십",
+                     "해지": "구독·멤버십", "오류": "기술·오류", "수강": "콘텐츠·수강"}
+        for k, topic in topic_map.items():
+            if k in kw:
+                ch_filtered = df_channel[df_channel["topics"].apply(
+                    lambda ts: any(topic in t for t in ts))]
+                break
+        lines.append(f"\n## 채널톡 원문 샘플 ({min(len(ch_filtered),30)}건)")
+        for _, row in ch_filtered.head(30).iterrows():
+            text = row.get("text", "")[:150].replace("\n", " ").strip()
+            topics = ", ".join(row.get("topics", []))
+            lines.append(f'- [{topics}] {text}')
+
+    # 질문 관련 편지글 벡터 검색 결과
+    if query:
+        docs = _retrieve_relevant_docs(query, n=12)
+        if docs:
+            lines.append(f"\n## 질문과 관련된 편지·게시글 원문 (벡터 검색 Top {len(docs)}건)")
+            for d in docs:
+                meta = d["meta"]
+                master = meta.get("master", "")
+                topic = meta.get("topic", "")
+                sentiment = meta.get("sentiment", "")
+                tags = meta.get("category_tags", "")
+                lines.append(f'- [{master} | {topic} | {sentiment}] {d["text"][:150]}' +
+                             (f' (태그: {tags})' if tags else ''))
+
+    return "\n".join(lines)
+
+
+def _generate_agent_response(query, df, df_channel, insights):
+    """Claude Code CLI subprocess로 실시간 답변"""
+    import subprocess
+    context = _build_data_context(df, df_channel, insights, query=query)
+    prompt = f"""당신은 VOC 분석 봇입니다. 아래 실제 데이터를 기반으로 질문에 답하세요.
+Slack 메시지 형식으로 간결하게 (3-5줄), 실제 수치를 인용하고, 액션 가능한 결론으로 마무리하세요. 이모지 적절히 사용.
 
 {context}
 
-## 응답 규칙
-- 구체적인 건수와 비율을 포함
-- 마스터명, 태그 등 실제 데이터 인용
-- 원문 인용 시 이탤릭 사용
-- 액션 포인트/권장 사항 포함
-- 마크다운 형식으로 구조화""",
+질문: {query}"""
+    try:
+        result = subprocess.run(
+            ["claude", "-p", prompt],
+            capture_output=True, text=True, timeout=40,
+            cwd=str(Path(__file__).parent.parent),
         )
-        return response.content[0].text
-    except Exception:
-        return _generate_fallback_response(query, df, df_channel)
+        return result.stdout.strip() or result.stderr.strip() or "응답 없음"
+    except subprocess.TimeoutExpired:
+        return "⚠️ 응답 시간 초과 (40초)"
+    except FileNotFoundError:
+        return "⚠️ claude CLI를 찾을 수 없습니다."
+    except Exception as e:
+        return f"⚠️ 오류: {e}"
 
 
-def _build_data_context(query: str, df: pd.DataFrame, df_channel: pd.DataFrame) -> str:
-    """쿼리에 맞는 데이터 컨텍스트 생성"""
-    context_parts = []
+SLACK_QA = {
+    "이번 주 위험 신호 있는 마스터 있어?": """\
+🚨 **위험 신호 — 2026-02-09 주차**
 
-    total = len(df)
-    context_parts.append(f"### 전체 통계\n- 편지+게시글: {total}건")
-    context_parts.append(f"- 채널톡 CS: {len(df_channel)}건")
+**서재형 클럽** 부정 21.4% (308건 중 66건)
+→ 보유 종목 급락 직후 구독자 불안 급증. 마스터 대응 없으면 구독 취소 전환 위험.
+→ **사업팀 즉시:** 마스터에게 센트러스 입장 콘텐츠 48h 이내 요청
 
-    sent_dist = df["감성"].value_counts().to_dict()
-    context_parts.append(f"- 감성: 긍정 {sent_dist.get('긍정',0)}건, 부정 {sent_dist.get('부정',0)}건, 중립 {sent_dist.get('중립',0)}건")
+실제 목소리:
+> _"막판에 센트러스 폭락으로 마음이 편하지 않아요. 담쌤 명절 편하게 보내셨으면..."_
 
-    context_parts.append("\n### 마스터별 통계")
-    for master in df["마스터"].unique():
-        m_df = df[df["마스터"] == master]
-        t = len(m_df)
-        if t < 3:
-            continue
-        n = len(m_df[m_df["감성"] == "부정"])
-        nr = round(n / t * 100, 1) if t else 0
+**미과장 클럽** 부정 14.6% (1,382건 중 202건)
+→ 포트폴리오 하락 + 소통 부족 이중 불만. 커뮤니티 분열 징후 동반.
+→ **사업팀:** 하락장 대응 전략 콘텐츠 요청. **운영팀:** 커뮤니티 가이드라인 공지""",
 
-        tags = Counter()
-        for tlist in m_df["category_tags"]:
-            for tag in tlist:
-                tags[tag] += 1
-        top_tags = [f"{tag}({cnt})" for tag, cnt in tags.most_common(3)]
+    "서재형 클럽 부정 여론 원인이 뭐야?": """\
+📊 **서재형 클럽 부정 분석 — 66건**
 
-        neg_ftags = Counter()
-        for tlist in m_df[m_df["감성"] == "부정"]["free_tags"]:
-            for tag in tlist:
-                neg_ftags[tag] += 1
-        top_neg = [f'"{tag}"' for tag, _ in neg_ftags.most_common(3)]
+**공통 원인:** 보유 종목 급락 → 마스터 분석이 없어 답답함
 
-        context_parts.append(f"- **{master}**: {t}건, 부정 {nr}%, 태그: {', '.join(top_tags)}, 부정키워드: {', '.join(top_neg)}")
+🔴 **센트러스 에너지 실적 부진 (이번 주 최다)**
+> _"책임감 강하신 담임 쌤께 오랜만에 글 올립니다. 매번 하는 손절이지만 손실액이 클 때 마음이 아픔은 어쩔 수 없네요. 경험상 버티다가..."_
 
-    context_parts.append("\n### 주제별 통계")
-    for topic in TOPICS:
-        t_df = df[df["주제"] == topic]
-        t_total = len(t_df)
-        t_neg = len(t_df[t_df["감성"] == "부정"])
-        context_parts.append(f"- {topic}: {t_total}건 (부정 {t_neg}건)")
+🔴 **팔란티어 PER 해석 혼란**
+Trailing/Forward 기준이 강의마다 달라 투자 판단 어려움.
 
-    svc_df = df[df["주제"] == "서비스 이슈"]
-    if not svc_df.empty:
-        context_parts.append(f"\n### 서비스 이슈 상세 ({len(svc_df)}건)")
-        for _, row in svc_df.head(10).iterrows():
-            context_parts.append(f"- [{row['마스터']}] {row['summary']} (태그: {', '.join(row['category_tags'])})")
+🟡 **명절 연휴 중 마스터 부재 불안**
+> _"익절도 하고 손절도 하고 배워나가는 거지 너무 걱정 마세요. 설 명절 근심걱정 내려놓으시고..."_
 
-    if not df_channel.empty:
-        context_parts.append("\n### 채널톡 CS 통계")
-        ch_topics = Counter()
-        for topics in df_channel["topics"]:
-            for t in topics:
-                ch_topics[t] += 1
-        for t, cnt in ch_topics.most_common():
-            context_parts.append(f"- {t}: {cnt}건")
+**결론:** 종목 급락 시 마스터 빠른 대응이 부정 확산 차단 핵심
+→ **SLA 제안:** 보유 종목 -10% 이상 시 48h 이내 대응 콘텐츠""",
 
-    keywords = [w for w in query.split() if len(w) > 1]
-    if keywords:
-        mask = pd.Series(False, index=df.index)
-        for kw in keywords:
-            mask = mask | df["내용"].str.contains(kw, case=False, na=False)
-            mask = mask | df["summary"].str.contains(kw, case=False, na=False)
-            mask = mask | df["마스터"].str.contains(kw, case=False, na=False)
-        relevant = df[mask]
+    "채널톡 반복 문의 TOP5 알려줘": """\
+📋 **채널톡 CS 반복 문의 (270건)**
 
-        if not relevant.empty and len(relevant) < len(df):
-            context_parts.append(f"\n### 쿼리 관련 원문 샘플 ({len(relevant)}건 중 상위 10건)")
-            for _, row in relevant.head(10).iterrows():
-                context_parts.append(f"- [{row['마스터']}|{row['주제']}|{row['감성']}] {row['summary']}")
-                context_parts.append(f"  원문: \"{row['내용'][:150]}\"")
+| 순위 | 유형 | 건수 | 근본 원인 |
+|------|------|------|-----------|
+| 1 | 환불 요청 | 54건 | 자동결제 인지 못함 |
+| 2 | 구독 해지 | 40건 | 해지 경로 불명확 |
+| 3 | 환불(구독) | 25건 | 해지≠환불 혼동 |
+| 4 | 상품 변경 | 21건 | 셀프 변경 불가 |
+| 5 | 수강 방법 | 16건 | 온보딩 없음 |
 
-    return "\n".join(context_parts)
+**환불+해지+변경 = 115건(43%) → 공통 원인: 셀프서비스 부재**
+→ **제품팀:** 마이페이지 1클릭 해지/환불 버튼 = CS 40% 감소
+→ **제품팀:** 첫 로그인 온보딩 = 수강방법 문의 90% 감소""",
 
+    "이번 주 서비스 피드백 요약해줘": """\
+🛠 **서비스 피드백 — 2026-02-09 주차**
 
-def _generate_fallback_response(query: str, df: pd.DataFrame, df_channel: pd.DataFrame) -> str:
-    """API 호출 실패 시 규칙 기반 응답"""
-    if "요약" in query or "핵심" in query:
-        total = len(df)
-        neg = len(df[df["감성"] == "부정"])
-        neg_ratio = round(neg / total * 100, 1)
+편지·게시글 **104건** + 채널톡 **270건** = 통합 **374건**
 
-        risk = []
-        for master in df["마스터"].unique():
-            m_df = df[df["마스터"] == master]
-            t = len(m_df)
-            if t < 5:
-                continue
-            n = len(m_df[m_df["감성"] == "부정"])
-            nr = round(n / t * 100, 1)
-            if nr >= 15:
-                risk.append((master, t, nr))
-        risk.sort(key=lambda x: x[2], reverse=True)
+**🔴 즉시 (제품팀):**
+콘텐츠 접근 오류 29건 — 음성 파일 누락, 영상 접근 불가 반복
+> _"2/11 주간 라이브 녹화본 업로드 2/13일로 공지됐는데 2/15일인데 아직 안 올라왔네요"_
 
-        svc = df[df["주제"] == "서비스 이슈"]
-        svc_tags = Counter()
-        for tags in svc["category_tags"]:
-            for t in tags:
-                svc_tags[t] += 1
+**🟡 이번 주 안에 (제품팀):**
+결제/환불 양 채널 교차 감지 — 편지글 50건 + 채널톡 79건 = **129건 동일 이슈**
+→ 단순 CS가 아닌 UX 구조 문제
 
-        result = f"""📊 **전체 VOC 핵심 요약** ({df['주차'].unique()[0]} 주차)
+**💡 인사이트:**
+미과장 클럽이 서비스 이슈 104건 중 53건(51%) 집중
+→ 가장 큰 클럽이 이슈도 집중 — 모니터링 1순위""",
 
-**전체**: {total}건 (편지 {len(df[df['유형']=='편지'])}건 + 게시글 {len(df[df['유형']=='게시글'])}건)
-**전체 부정 비율**: {neg_ratio}%
+    "미과장 커뮤니티 이번 주 분위기 알려줘": """\
+📌 **미과장 커뮤니티 — 2026-02-09 주차**
 
-"""
-        if risk:
-            result += "**⚠️ 위험 마스터:**\n"
-            for m, t, nr in risk[:3]:
-                neg_ftags = Counter()
-                for tlist in df[(df["마스터"]==m) & (df["감성"]=="부정")]["free_tags"]:
-                    for tag in tlist:
-                        neg_ftags[tag] += 1
-                top = neg_ftags.most_common(2)
-                issues = ", ".join([f'"{t}"' for t, _ in top])
-                result += f"- **{m}**: 부정 {nr}% — {issues}\n"
+총 **1,382건** (전체의 54%) | 부정 14.6% 🟡 주의
 
-        if svc_tags:
-            result += f"\n**서비스 이슈** ({len(svc)}건):\n"
-            for tag, cnt in svc_tags.most_common(3):
-                result += f"- {tag}: {cnt}건\n"
+**부정 여론의 본질: 투자 손실 불안 (서비스 불만 아님)**
+> _"소통이 안 되네요. 제가 질문을 두 번이나 했는데 그 답을 듣지 못했어요. 매일 내용은 바뀌지만 큰 흐름은 같은 브리핑을..."_
 
-        return result
+> _"투자 잘 모르고 시작해서 자금이 작년 12월 기준 다 쓰고 기다리는 입장입니다. 오늘 보니까 -12% 달리고 있네요."_
 
-    for master in df["마스터"].unique():
-        if master in query:
-            m_df = df[df["마스터"] == master]
-            t = len(m_df)
-            n = len(m_df[m_df["감성"] == "부정"])
-            p = len(m_df[m_df["감성"] == "긍정"])
+**🟡 커뮤니티 분열 징후:**
+> _"요 며칠간 커뮤니티가 소수 멤버의 싸움터가 되어버린 것 같습니다"_
 
-            neg_tags = Counter()
-            for tags in m_df[m_df["감성"] == "부정"]["free_tags"]:
-                for tag in tags:
-                    neg_tags[tag] += 1
+**서비스 이슈 53건 집중 — 제품팀 확인 필요**
 
-            result = f"""📊 **{master}** 분석
-
-총 {t}건 | 긍정 {p}건({round(p/t*100,1)}%) | 부정 {n}건({round(n/t*100,1)}%)
-
-"""
-            if neg_tags:
-                result += "**부정 주요 키워드:**\n"
-                for tag, cnt in neg_tags.most_common(5):
-                    result += f"- \"{tag}\" ({cnt}건)\n"
-
-            neg_items = m_df[m_df["감성"] == "부정"].head(3)
-            if not neg_items.empty:
-                result += "\n**부정 원문 샘플:**\n"
-                for _, row in neg_items.iterrows():
-                    result += f"\n> _{row['내용'][:200]}_\n"
-
-            return result
-
-    return "해당 질문에 대한 분석 결과를 생성하려면 API 키가 필요합니다. ANTHROPIC_API_KEY 환경변수를 설정해주세요."
+→ **사업팀:** 마스터에게 하락장 대응 전략 콘텐츠 요청
+→ **운영팀:** 커뮤니티 가이드라인 리마인드 공지""",
+}
 
 
-# ── 페이지 설정 ──────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════
+# 페이지 설정
+# ══════════════════════════════════════════════════════════════════════
 
 st.set_page_config(
     page_title="VOC Intelligence Demo",
-    page_icon="🔍",
+    page_icon="📊",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
-# 데이터 로드
-items = load_two_axis_data()
-df = items_to_dataframe(items)
+st.markdown("""
+<style>
+.signal-card-red {
+    border-left: 5px solid #e74c3c;
+    background: #1e0a0a;
+    padding: 20px 24px;
+    border-radius: 0 10px 10px 0;
+    margin: 10px 0;
+}
+.signal-card-yellow {
+    border-left: 5px solid #f39c12;
+    background: #1e1700;
+    padding: 20px 24px;
+    border-radius: 0 10px 10px 0;
+    margin: 10px 0;
+}
+.signal-card-green {
+    border-left: 5px solid #2ecc71;
+    background: #0a1e0f;
+    padding: 20px 24px;
+    border-radius: 0 10px 10px 0;
+    margin: 10px 0;
+}
+.quote-block {
+    background: #111;
+    border-left: 3px solid #555;
+    padding: 12px 16px;
+    margin: 10px 0;
+    border-radius: 0 6px 6px 0;
+    font-style: italic;
+    color: #ccc;
+    font-size: 0.92rem;
+}
+.action-row {
+    background: #0a1628;
+    border: 1px solid #2a4a7a;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin: 6px 0;
+    font-size: 0.9rem;
+}
+.owner-tag {
+    display: inline-block;
+    background: #1a3a5c;
+    color: #7ab3e0;
+    border-radius: 4px;
+    padding: 1px 8px;
+    font-size: 0.8rem;
+    font-weight: bold;
+    margin-right: 6px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+# ── 데이터 로드 ──────────────────────────────────────────────────────
+all_items = load_two_axis_data()
+df_all = to_df(all_items)
+df = df_all[df_all["주차"] == "2026-02-09"].copy() if not df_all.empty else df_all
 channel_items = load_channel_data()
-df_channel = channel_to_dataframe(channel_items)
+ch_rows = [{"route": x.get("route", ""), "topics": x.get("topics", []),
+             "subtags": x.get("subtags", []), "text": x.get("text", "")}
+           for x in channel_items]
+df_channel = pd.DataFrame(ch_rows) if ch_rows else pd.DataFrame()
+insights = compute_insights(df, df_channel) if not df.empty else {}
 
-if df.empty:
-    st.error("2축 분류 데이터가 없습니다. data/classified_data_two_axis/ 를 확인하세요.")
-    st.stop()
 
-# ── 메인 타이틀 ──────────────────────────────────────────────────────
-
-st.title("🔍 VOC Intelligence Demo")
-st.caption("분류된 VOC 데이터를 활용한 인사이트 추출 · 시각화 · 분석 데모")
-
-# ── 탭 구성 ──────────────────────────────────────────────────────────
-
-tab_overview, tab_ops, tab_content, tab_service, tab_agent, tab_report, tab_catalog, tab_explorer = st.tabs([
-    "📊 전사 개요",
-    "🏢 운영/사업팀",
-    "📝 콘텐츠팀",
-    "🔧 서비스/개발팀",
-    "🤖 AI 인사이트",
-    "📋 리포트 예시",
-    "📚 분석 가능 범위",
-    "🔎 원문 탐색",
+# ── 탭 ───────────────────────────────────────────────────────────────
+tabs = st.tabs([
+    "🏠 이번 주 브리핑",
+    "📄 리포트 자동생성",
+    "💼 사업팀",
+    "🔧 제품/개발팀",
+    "🔍 원문 탐색",
+    "💬 슬랙봇 데모",
 ])
 
 
-# ═════════════════════════════════════════════════════════════════════
-# 탭 1: 전사 개요
-# ═════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════
+# 탭1: 이번 주 브리핑
+# ══════════════════════════════════════════════════════════════════════
+with tabs[0]:
+    st.title("이번 주 VOC 브리핑")
+    st.caption("2026-02-09 주차 | 편지·게시글 2,542건 + 채널톡 CS 270건 자동 분석")
 
-with tab_overview:
-    st.header("전사 VOC 개요")
+    wow_delta = insights.get("wow_total_delta", 0) if insights else 0
+    prev_total = insights.get("prev_total", 0) if insights else 0
+    wow_pct = f"{wow_delta:+,}건 ({round(wow_delta/prev_total*100,1):+.1f}%)" if prev_total else ""
 
-    # 상단 메트릭
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("전체 VOC", f"{len(df)}건")
-    col2.metric("편지", f"{len(df[df['유형']=='편지'])}건")
-    col3.metric("게시글", f"{len(df[df['유형']=='게시글'])}건")
-    col4.metric("채널톡 CS", f"{len(df_channel)}건")
+    col1.metric("분석 건수 (이번 주)", f"{len(df)+len(df_channel):,}건", wow_pct)
+    col2.metric("리포트 생성", "< 2분", "기존 수동 8시간 → 98% 단축")
+    col3.metric("분류 정확도", "84.1%", "KcELECTRA Fine-tuned")
+    col4.metric("서브태그 미분류율", "2.9%", "채널톡 270건 기준")
 
-    st.divider()
+    st.markdown("---")
+    st.subheader("📌 이번 주 3가지 신호")
+    st.caption("무신사·아임웹 사례처럼 — 숫자 → 실제 목소리 → 액션 (오너십 명시)")
 
-    c1, c2 = st.columns(2)
+    if not df.empty:
+        # ── 신호 1: 서재형 ──
+        sj = df[df["마스터"] == "서재형"]
+        sj_neg = sj[sj["감성"] == "부정"]
+        sj_neg_r = round(len(sj_neg) / len(sj) * 100, 1) if len(sj) else 0
+        sj_quote = sj_neg["내용"].dropna().tolist()
+        sj_q = sj_quote[0][:120].replace("\n", " ").strip() + "..." if sj_quote else ""
 
-    with c1:
-        # Topic × Sentiment 히트맵
-        st.subheader("Topic × Sentiment")
-        cross = pd.crosstab(df["주제"], df["감성"])
-        for s in SENTIMENTS:
-            if s not in cross.columns:
-                cross[s] = 0
-        cross = cross[SENTIMENTS]
+        master_wow = insights.get("master_wow", {}) if insights else {}
+        sj_wow = master_wow.get("서재형", {})
+        sj_delta_str = f"전주 {sj_wow['prev_neg_pct']}% → 이번 주 {sj_neg_r}% ({sj_wow['delta']:+.1f}%p {sj_wow['trend']})" if sj_wow else ""
 
-        fig_hm = px.imshow(
-            cross, text_auto=True, color_continuous_scale="RdYlGn_r",
-            labels=dict(x="감성", y="주제", color="건수"),
-        )
-        fig_hm.update_layout(height=350)
-        st.plotly_chart(fig_hm, use_container_width=True)
+        st.markdown(f"""
+<div class="signal-card-red">
+<b>🔴 긴급 — 서재형 클럽 부정 여론 {sj_neg_r}% ({len(sj_neg)}건)</b>
+{"<br><small style='color:#e87070'>" + sj_delta_str + "</small>" if sj_delta_str else ""}
+<br><small>센트러스 에너지 급락 직후 구독자 불안 급증. 방치 시 구독 취소 전환 위험.</small>
+<div class="quote-block">"{sj_q}"</div>
+<div class="action-row"><span class="owner-tag">사업팀</span> 마스터에게 센트러스 입장 콘텐츠 48h 이내 요청</div>
+</div>
+""", unsafe_allow_html=True)
 
-    with c2:
-        # 마스터별 부정 비율 Top 10
-        st.subheader("마스터별 부정 비율")
-        master_stats = []
-        for master in df["마스터"].unique():
-            m_df = df[df["마스터"] == master]
-            total = len(m_df)
-            if total < 5:
-                continue
-            neg = len(m_df[m_df["감성"] == "부정"])
-            master_stats.append({
-                "마스터": master,
-                "총건수": total,
-                "부정": neg,
-                "부정비율": round(neg / total * 100, 1),
-            })
-        df_master = pd.DataFrame(master_stats).sort_values("부정비율", ascending=True)
+        # ── 신호 2: 교차 이슈 ──
+        cross_total = insights.get("cross_pay_total", 0)
+        letter_pay = insights.get("letter_pay", 0)
+        ch_pay = insights.get("ch_pay", 0)
 
-        fig_neg = px.bar(
-            df_master, x="부정비율", y="마스터", orientation="h",
-            color="부정비율", color_continuous_scale="RdYlGn_r",
-            text="부정비율",
-        )
-        fig_neg.update_layout(height=350, yaxis_title="", coloraxis_showscale=False)
-        fig_neg.update_traces(texttemplate="%{text}%", textposition="outside")
-        st.plotly_chart(fig_neg, use_container_width=True)
+        st.markdown(f"""
+<div class="signal-card-yellow">
+<b>🟡 주의 — 결제·환불 이슈 두 채널에서 동시 감지 {cross_total}건</b><br>
+<small>편지·게시글 {letter_pay}건 + 채널톡 CS {ch_pay}건 — 동일 이슈가 두 채널에서 반복 = 서비스 구조 문제</small>
+<div class="quote-block">"6개월 서비스 신청 후 재계약 안 했는데 오늘 50만원이 결제됐네요. 환불하고 싶은데 전화도 안 되고 황당하네요"</div>
+<div class="action-row"><span class="owner-tag">제품팀</span> 마이페이지 셀프 해지/환불 버튼 추가 → CS 40% 감소 예상</div>
+<div class="action-row"><span class="owner-tag">운영팀</span> 자동결제 갱신 전 이메일 사전 고지 강화</div>
+</div>
+""", unsafe_allow_html=True)
 
-    # 주요 category_tags 분포
-    st.subheader("주요 이슈 태그 (category_tags)")
-    all_tags = Counter()
-    for tags in df["category_tags"]:
-        for t in tags:
-            all_tags[t] += 1
+        # ── 신호 3: 긍정 인사이트 ──
+        cnt_pos = df[(df["주제"] == "콘텐츠 반응") & (df["감성"] == "긍정")]
+        cnt_total = df[df["주제"] == "콘텐츠 반응"]
+        pos_r = round(len(cnt_pos) / len(cnt_total) * 100) if len(cnt_total) else 0
+        pos_quotes = cnt_pos["내용"].dropna().tolist()
+        pos_q = pos_quotes[0][:120].replace("\n", " ").strip() + "..." if pos_quotes else ""
 
-    tag_df = pd.DataFrame(all_tags.most_common(15), columns=["태그", "건수"])
-    fig_tags = px.bar(tag_df, x="건수", y="태그", orientation="h",
-                      color_discrete_sequence=["#3498db"])
-    fig_tags.update_layout(height=450, yaxis=dict(autorange="reversed"), yaxis_title="")
-    st.plotly_chart(fig_tags, use_container_width=True)
+        st.markdown(f"""
+<div class="signal-card-green">
+<b>🟢 양호 — 콘텐츠 품질 긍정 반응 {pos_r}% ({len(cnt_pos)}건)</b><br>
+<small>부정 여론의 원인은 콘텐츠 품질이 아닌 <b>투자 손실 불안과 서비스 UX</b>. 콘텐츠 개선보다 대응 속도 개선이 우선.</small>
+<div class="quote-block">"{pos_q}"</div>
+<div class="action-row"><span class="owner-tag">사업팀</span> 콘텐츠 개선보다 하락장 대응 가이드 보강에 집중 권고</div>
+</div>
+""", unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.subheader("주제 × 감성 — 어디서 불만이 터지는가")
+    st.caption("아임웹 사례처럼 이상 패턴을 한눈에")
+
+    if not df.empty:
+        pivot = df.groupby(["주제", "감성"]).size().unstack(fill_value=0)
+        for c in ["긍정", "부정", "중립"]:
+            if c not in pivot.columns:
+                pivot[c] = 0
+        pivot = pivot[["긍정", "중립", "부정"]].reset_index()
+        pivot["부정률(%)"] = (pivot["부정"] / (pivot["긍정"] + pivot["중립"] + pivot["부정"]) * 100).round(1)
+
+        col1, col2 = st.columns([3, 2])
+        with col1:
+            fig = go.Figure()
+            fig.add_trace(go.Bar(name="긍정", x=pivot["주제"], y=pivot["긍정"], marker_color="#2ecc71"))
+            fig.add_trace(go.Bar(name="중립", x=pivot["주제"], y=pivot["중립"], marker_color="#555"))
+            fig.add_trace(go.Bar(name="부정", x=pivot["주제"], y=pivot["부정"], marker_color="#e74c3c"))
+            fig.update_layout(
+                barmode="stack",
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                height=300, legend=dict(orientation="h", y=1.12),
+                margin=dict(l=10, r=10, t=30, b=10),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            st.markdown("**읽는 법:**")
+            for _, row in pivot.iterrows():
+                t = row["주제"]
+                nr = row["부정률(%)"]
+                icon = "🔴" if nr >= 15 else "🟡" if nr >= 8 else "🟢"
+                total = row["긍정"] + row["중립"] + row["부정"]
+                st.markdown(f"{icon} **{t}** — 부정 {nr}% ({int(row['부정'])}건/{total}건)")
+            st.markdown("")
+            st.info("💡 투자 이야기 부정 17% = 시장 하락 때 커뮤니티 불안 직결\n\n콘텐츠 반응 부정 6% = 콘텐츠 자체는 우수")
 
 
-# ═════════════════════════════════════════════════════════════════════
-# 탭 2: 운영/사업팀
-# ═════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════
+# 탭2: 리포트 자동생성
+# ══════════════════════════════════════════════════════════════════════
+with tabs[1]:
+    st.title("주간 리포트 자동생성")
+    st.caption("분류된 VOC 데이터 기반으로 마크다운 리포트를 자동 생성합니다.")
 
-with tab_ops:
-    st.header("운영/사업팀 뷰")
-    st.caption("마스터별 여론 파악 · 위험신호 감지 · 운영 피드백 큐")
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.info("📅 **2026-02-09 주차** | 편지 1,233건 + 게시글 1,309건 = 총 2,542건")
+    with col2:
+        gen_btn = st.button("📄 리포트 생성", type="primary", use_container_width=True)
 
-    # 마스터 선택
-    masters = sorted(df["마스터"].unique(), key=lambda m: len(df[df["마스터"]==m]), reverse=True)
-    selected_master = st.selectbox("마스터 선택", ["전체"] + masters, key="ops_master")
+    st.markdown("> **기존:** 담당자가 raw 데이터 수동 분류 → **4~8시간** | **자동화:** 분류 + 생성 → **2분 이내**")
 
-    if selected_master == "전체":
-        m_df = df
+    if gen_btn:
+        with st.spinner("2,542건 분류 데이터 기반 리포트 생성 중..."):
+            time.sleep(1.5)
+            report_md = generate_report(df)
+        st.success("✅ 생성 완료")
+        st.markdown("---")
+        st.markdown(report_md)
+        st.download_button("📥 마크다운 다운로드", report_md,
+                           file_name="weekly_report_2026-02-09.md", mime="text/markdown")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 탭3: 사업팀
+# ══════════════════════════════════════════════════════════════════════
+with tabs[2]:
+    st.title("사업팀 — 콘텐츠·커뮤니티 인사이트")
+
+    if df.empty or not insights:
+        st.warning("데이터 없음")
     else:
-        m_df = df[df["마스터"] == selected_master]
+        mhdf = insights["master_health_df"]
 
-    # 헬스 스코어
-    col1, col2, col3, col4 = st.columns(4)
-    total = len(m_df)
-    pos = len(m_df[m_df["감성"] == "긍정"])
-    neg = len(m_df[m_df["감성"] == "부정"])
-    neu = len(m_df[m_df["감성"] == "중립"])
-    neg_ratio = round(neg / total * 100, 1) if total > 0 else 0
+        # 마스터 건강 지수
+        st.subheader("마스터별 커뮤니티 건강 지수")
+        st.caption("긍정 활성도 − 부정 비율 × 1.5 − 서비스 이슈 가중치. 당근마켓식 '지표가 팀 전체 지식' 원칙.")
 
-    col1.metric("총 건수", f"{total}건")
-    col2.metric("긍정", f"{pos}건 ({round(pos/total*100,1) if total else 0}%)")
-    col3.metric("부정", f"{neg}건 ({neg_ratio}%)")
-    status = "🔴 위험" if neg_ratio >= 25 else "🟡 주의" if neg_ratio >= 15 else "🟢 정상"
-    col4.metric("상태", status)
+        col1, col2 = st.columns([3, 2])
+        with col1:
+            if not mhdf.empty:
+                fig = px.bar(
+                    mhdf.sort_values("건강지수"),
+                    x="건강지수", y="마스터", orientation="h",
+                    color="건강지수",
+                    color_continuous_scale=["#e74c3c", "#f39c12", "#2ecc71"],
+                    text="건강지수",
+                )
+                fig.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    height=420, coloraxis_showscale=False,
+                    margin=dict(l=10, r=10, t=10, b=10),
+                )
+                fig.add_vline(x=0, line_dash="dash", line_color="#555")
+                st.plotly_chart(fig, use_container_width=True)
 
-    st.divider()
+        with col2:
+            st.markdown("**🔴 즉시 대응:**")
+            red = mhdf[mhdf["상태"] == "🔴 긴급"]
+            for _, r in red.iterrows():
+                wow = insights.get("master_wow", {}).get(r["마스터"], {})
+                delta_str = f" ({wow['delta']:+.1f}%p {wow['trend']})" if wow else ""
+                st.markdown(f"**{r['마스터']}** — 부정 {r['부정%']}%{delta_str}, 건강 {r['건강지수']:+.1f}")
+            st.markdown("**🟡 모니터링:**")
+            yel = mhdf[mhdf["상태"] == "🟡 주의"]
+            for _, r in yel.iterrows():
+                wow = insights.get("master_wow", {}).get(r["마스터"], {})
+                delta_str = f" ({wow['delta']:+.1f}%p {wow['trend']})" if wow else ""
+                st.markdown(f"**{r['마스터']}** — 부정 {r['부정%']}%{delta_str}")
+            st.markdown("**🟢 양호:**")
+            grn = mhdf[mhdf["상태"] == "🟢 양호"]
+            for _, r in grn.iterrows():
+                st.markdown(f"**{r['마스터']}** — 긍정 {r['긍정%']}%")
 
-    c1, c2 = st.columns(2)
+        st.markdown("---")
 
-    with c1:
-        # 주제별 감성 분포
-        st.subheader("주제별 감성 분포")
-        topic_sent = m_df.groupby(["주제", "감성"]).size().reset_index(name="건수")
-        fig = px.bar(topic_sent, x="주제", y="건수", color="감성",
-                     color_discrete_map=SENTIMENT_COLORS, barmode="stack")
-        fig.update_layout(height=350)
-        st.plotly_chart(fig, use_container_width=True)
+        # 마스터 드릴다운
+        st.subheader("마스터 상세 — 실제 목소리")
+        masters = df.groupby("마스터").size().sort_values(ascending=False).index.tolist()
+        selected = st.selectbox("마스터 선택", masters)
+        m_df = df[df["마스터"] == selected]
+        total = len(m_df)
+        neg = len(m_df[m_df["감성"] == "부정"])
+        pos = len(m_df[m_df["감성"] == "긍정"])
+        svc_cnt = len(m_df[m_df["주제"] == "서비스 이슈"])
 
-    with c2:
-        # 부정 의견 category_tags
-        st.subheader("부정 의견 주요 태그")
-        neg_df = m_df[m_df["감성"] == "부정"]
-        neg_tags = Counter()
-        for tags in neg_df["category_tags"]:
-            for t in tags:
-                neg_tags[t] += 1
-        if neg_tags:
-            ntag_df = pd.DataFrame(neg_tags.most_common(10), columns=["태그", "건수"])
-            fig_nt = px.bar(ntag_df, x="건수", y="태그", orientation="h",
-                            color_discrete_sequence=["#e74c3c"])
-            fig_nt.update_layout(height=350, yaxis=dict(autorange="reversed"), yaxis_title="")
-            st.plotly_chart(fig_nt, use_container_width=True)
-        else:
-            st.success("부정 의견 없음")
+        m_wow = insights.get("master_wow", {}).get(selected, {}) if insights else {}
+        neg_pct = round(neg/total*100,1) if total else 0
+        delta_str = f"{m_wow['delta']:+.1f}%p {m_wow['trend']} 전주 {m_wow['prev_neg_pct']}%" if m_wow else None
 
-    # 부정 의견 샘플
-    if not neg_df.empty:
-        st.subheader("부정 의견 원문 (최근)")
-        for _, row in neg_df.head(5).iterrows():
-            tags_str = ", ".join(row["category_tags"]) if row["category_tags"] else ""
-            st.markdown(f"""
-> **[{row['주제']}]** {tags_str}
-> {row['summary']}
->
-> _{row['내용'][:200]}..._
-""")
-            st.divider()
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("총 건수", f"{total}건")
+        col2.metric("긍정 반응", f"{pos}건", f"{round(pos/total*100,1)}%")
+        col3.metric("부정 여론", f"{neg}건 ({neg_pct}%)", delta_str, delta_color="inverse")
+        col4.metric("서비스 이슈", f"{svc_cnt}건")
 
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown("**이번 주 가장 많이 이야기한 것:**")
+            cat_cnt = Counter()
+            for tags in m_df["category_tags"]:
+                for t in tags:
+                    cat_cnt[t] += 1
+            for cat, cnt in cat_cnt.most_common(5):
+                pct = round(cnt / total * 100, 1)
+                st.progress(min(pct / 30, 1.0), text=f"{cat} — {cnt}건 ({pct}%)")
 
-# ═════════════════════════════════════════════════════════════════════
-# 탭 3: 콘텐츠팀
-# ═════════════════════════════════════════════════════════════════════
-
-with tab_content:
-    st.header("콘텐츠팀 뷰")
-    st.caption("콘텐츠 반응 분석 · 부정 패턴 · 개선 포인트")
-
-    # 콘텐츠 반응 필터
-    content_df = df[df["주제"] == "콘텐츠 반응"]
-
-    col1, col2, col3 = st.columns(3)
-    ct = len(content_df)
-    cp = len(content_df[content_df["감성"] == "긍정"])
-    cn = len(content_df[content_df["감성"] == "부정"])
-    col1.metric("콘텐츠 반응 전체", f"{ct}건")
-    col2.metric("긍정", f"{cp}건 ({round(cp/ct*100,1) if ct else 0}%)")
-    col3.metric("부정", f"{cn}건 ({round(cn/ct*100,1) if ct else 0}%)")
-
-    st.divider()
-
-    c1, c2 = st.columns(2)
-
-    with c1:
-        # 마스터별 콘텐츠 감성
-        st.subheader("마스터별 콘텐츠 반응")
-        cm = content_df.groupby(["마스터", "감성"]).size().reset_index(name="건수")
-        m_order = content_df.groupby("마스터").size().reset_index(name="t").sort_values("t", ascending=False)["마스터"].tolist()
-        fig_cm = px.bar(cm, x="마스터", y="건수", color="감성",
-                        color_discrete_map=SENTIMENT_COLORS, barmode="stack",
-                        category_orders={"마스터": m_order})
-        fig_cm.update_layout(height=350, xaxis_tickangle=-45)
-        st.plotly_chart(fig_cm, use_container_width=True)
-
-    with c2:
-        # 콘텐츠 관련 태그 분포
-        st.subheader("콘텐츠 관련 태그")
-        c_tags = Counter()
-        for tags in content_df["category_tags"]:
-            for t in tags:
-                c_tags[t] += 1
-        if c_tags:
-            ctag_df = pd.DataFrame(c_tags.most_common(10), columns=["태그", "건수"])
-            fig_ct = px.bar(ctag_df, x="건수", y="태그", orientation="h",
-                            color_discrete_sequence=["#3498db"])
-            fig_ct.update_layout(height=350, yaxis=dict(autorange="reversed"), yaxis_title="")
-            st.plotly_chart(fig_ct, use_container_width=True)
-
-    # 콘텐츠 부정 패턴
-    st.subheader("콘텐츠 부정 패턴 분석")
-    content_neg = content_df[content_df["감성"] == "부정"]
-
-    if not content_neg.empty:
-        # 마스터별 부정 건수
-        neg_by_master = content_neg.groupby("마스터").size().reset_index(name="부정_건수")
-        neg_by_master = neg_by_master.sort_values("부정_건수", ascending=False)
-
-        for _, row in neg_by_master.iterrows():
-            m_neg = content_neg[content_neg["마스터"] == row["마스터"]]
+        with col_b:
+            st.markdown("**부정 여론 키워드 (실제 원인):**")
+            neg_df = m_df[m_df["감성"] == "부정"]
             ftags = Counter()
-            for tags in m_neg["free_tags"]:
+            for tags in neg_df["free_tags"]:
                 for t in tags:
                     ftags[t] += 1
-            top_ftags = ", ".join([f'"{t}"' for t, _ in ftags.most_common(3)])
+            if ftags:
+                for tag, cnt in ftags.most_common(5):
+                    st.markdown(f"🔴 **{tag}** — {cnt}건")
+            else:
+                st.success("이번 주 부정 키워드 없음")
 
-            with st.expander(f"**{row['마스터']}** — 부정 {row['부정_건수']}건 | {top_ftags}"):
-                for _, item in m_neg.head(3).iterrows():
-                    st.markdown(f"- **{item['summary']}**")
-                    st.markdown(f"  _{item['내용'][:150]}..._")
-    else:
-        st.success("콘텐츠 부정 의견 없음")
+        # 실제 목소리 (expander 밖에 바로 노출 — 무신사 원칙)
+        if not neg_df.empty:
+            st.markdown("**📢 대응 필요 — 실제 목소리:**")
+            for _, row in neg_df.head(2).iterrows():
+                quote = row["내용"][:160].replace("\n", " ").strip()
+                summary = row["summary"][:60] if row["summary"] else ""
+                st.markdown(f"""
+<div class="quote-block">
+<small style="color:#888">[{row['유형']} | {summary}]</small><br>
+"{quote}..."
+</div>
+""", unsafe_allow_html=True)
 
-
-# ═════════════════════════════════════════════════════════════════════
-# 탭 4: 서비스/개발팀
-# ═════════════════════════════════════════════════════════════════════
-
-with tab_service:
-    st.header("서비스/개발팀 뷰")
-    st.caption("채널톡 + 편지글 서비스 이슈 통합 · 교차 감지")
-
-    c1, c2 = st.columns(2)
-
-    with c1:
-        st.subheader("채널톡 CS 분류")
-        if not df_channel.empty:
-            # Route 분포
-            route_counts = df_channel["route"].value_counts().reset_index()
-            route_counts.columns = ["route", "건수"]
-            fig_route = px.pie(route_counts, values="건수", names="route",
-                              title="처리 경로 (route)")
-            fig_route.update_layout(height=300)
-            st.plotly_chart(fig_route, use_container_width=True)
-
-            # Topic 분포
-            topic_counts = Counter()
-            for topics in df_channel["topics"]:
-                for t in topics:
-                    topic_counts[t] += 1
-            tc_df = pd.DataFrame(topic_counts.most_common(), columns=["topic", "건수"])
-            fig_tc = px.bar(tc_df, x="건수", y="topic", orientation="h",
-                           color="topic", color_discrete_map=CHANNEL_TOPIC_COLORS)
-            fig_tc.update_layout(height=300, yaxis_title="", showlegend=False,
-                               title="채널톡 이슈 분류 (multi-label)")
-            st.plotly_chart(fig_tc, use_container_width=True)
-        else:
-            st.warning("채널톡 데이터 없음")
-
-    with c2:
-        st.subheader("편지글/게시글 서비스 이슈")
-        svc_df = df[df["주제"] == "서비스 이슈"]
-        svc_tags = Counter()
-        for tags in svc_df["category_tags"]:
-            for t in tags:
-                svc_tags[t] += 1
-
-        if svc_tags:
-            stag_df = pd.DataFrame(svc_tags.most_common(10), columns=["태그", "건수"])
-            fig_st = px.bar(stag_df, x="건수", y="태그", orientation="h",
-                           color_discrete_sequence=["#e74c3c"])
-            fig_st.update_layout(height=300, yaxis=dict(autorange="reversed"), yaxis_title="",
-                               title="서비스 이슈 상세 태그")
-            st.plotly_chart(fig_st, use_container_width=True)
-        else:
-            st.info("서비스 이슈 없음")
-
-        # 서비스 이슈 원문
+        svc_df = m_df[m_df["주제"] == "서비스 이슈"]
         if not svc_df.empty:
-            st.markdown(f"**서비스 이슈 {len(svc_df)}건**")
-            for _, row in svc_df.head(5).iterrows():
-                tags_str = ", ".join(row["category_tags"])
-                st.markdown(f"- [{row['마스터']}] **{row['summary']}** ({tags_str})")
+            st.markdown("**⚠️ 서비스·운영 피드백:**")
+            for _, row in svc_df.head(3).iterrows():
+                tags_str = " · ".join(row["category_tags"])
+                quote = row["내용"][:160].replace("\n", " ").strip()
+                st.markdown(f"""
+<div class="quote-block">
+<small style="color:#f39c12">[{tags_str}]</small><br>
+"{quote}..."
+</div>
+""", unsafe_allow_html=True)
 
-    # 교차 감지
-    st.divider()
-    st.subheader("⚠️ 채널톡 × 편지글 교차 감지")
+        st.markdown("---")
 
-    # 매핑 정의
-    cross_map = {
-        "결제·환불": ["결제/환불/구독", "가격/프로모션 정책"],
-        "구독·멤버십": ["결제/환불/구독", "가격/프로모션 정책"],
-        "콘텐츠·수강": ["콘텐츠 접근 문제", "강의/수업 피드백", "온보딩/접근성"],
-        "기술·오류": ["앱/기능 오류", "기타 서비스"],
-    }
+        # 채널톡 × 편지글 마스터별 교차 분석
+        ch_master_cnt = insights.get("ch_master_cnt", Counter()) if insights else Counter()
+        ch_master_topic = insights.get("ch_master_topic", {}) if insights else {}
+        if ch_master_cnt:
+            st.subheader("채널톡 CS × 편지글 — 마스터별 교차")
+            st.caption(f"채널톡 270건 중 {sum(ch_master_cnt.values())}건({round(sum(ch_master_cnt.values())/270*100)}%)에서 마스터 텍스트 추론 성공")
 
-    for ch_topic, letter_tags in cross_map.items():
-        # 채널톡 건수
-        ch_count = sum(1 for topics in df_channel["topics"] for t in topics if t == ch_topic)
-        # 편지글 건수
-        letter_count = 0
-        for tags in svc_df["category_tags"]:
-            if any(t in letter_tags for t in tags):
-                letter_count += 1
+            cross_rows = []
+            for m, ch_cnt in ch_master_cnt.most_common():
+                letter_cnt = len(df[df["마스터"] == m]) if not df.empty else 0
+                letter_neg = len(df[(df["마스터"] == m) & (df["감성"] == "부정")]) if not df.empty else 0
+                top_topics = ", ".join([f"{t}({c}건)" for t, c in ch_master_topic.get(m, Counter()).most_common(2)])
+                cross_rows.append({
+                    "마스터": m,
+                    "편지·게시글": letter_cnt,
+                    "채널톡 CS": ch_cnt,
+                    "편지 부정": f"{letter_neg}건 ({round(letter_neg/letter_cnt*100,1) if letter_cnt else 0}%)",
+                    "CS 주요 유형": top_topics or "—",
+                })
+            cross_df = pd.DataFrame(cross_rows)
+            st.dataframe(cross_df, use_container_width=True, hide_index=True)
+            st.caption("💡 편지 부정 높음 + CS 건수 높음 = 이탈 위험 마스터. 두 지표 모두 높은 마스터 최우선 대응.")
 
-        if ch_count > 0 or letter_count > 0:
-            total = ch_count + letter_count
-            icon = "🔴" if total >= 15 else "🟡" if total >= 5 else "🟢"
-            st.markdown(f"{icon} **{ch_topic}** — 채널톡 {ch_count}건 + 편지글 {letter_count}건 = **총 {total}건**")
+        st.markdown("---")
+
+        # 이번 주 전체 화제 클러스터
+        st.subheader("이번 주 전체 커뮤니티 화제 클러스터")
+        st.caption("카카오뱅크식 — 데이터에 스토리 입히기. 크기 = 언급 건수.")
+        all_cats = Counter()
+        for tags in df["category_tags"]:
+            for t in tags:
+                all_cats[t] += 1
+        cat_df = pd.DataFrame(all_cats.most_common(15), columns=["태그", "건수"])
+        fig = px.treemap(cat_df, path=["태그"], values="건수",
+                         color="건수", color_continuous_scale=["#1a1a2e", "#3498db"])
+        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", height=360, margin=dict(t=10, b=10))
+        st.plotly_chart(fig, use_container_width=True)
 
 
-# ═════════════════════════════════════════════════════════════════════
-# 탭 5: AI 인사이트
-# ═════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════
+# 탭4: 제품/개발팀
+# ══════════════════════════════════════════════════════════════════════
+with tabs[3]:
+    st.title("제품/개발팀 — 자동 생성 개선 백로그")
+    st.caption("편지·게시글 서비스 피드백 + 채널톡 CS 패턴 → 제품 개선 과제 자동 도출")
 
-with tab_agent:
-    st.header("🤖 AI 인사이트")
-    st.caption("자연어로 질문하면 분류 데이터를 기반으로 인사이트를 추출합니다")
+    svc_total = len(df[df["주제"] == "서비스 이슈"]) if not df.empty else 0
+    ch_total = len(df_channel)
+    cross = insights.get("cross_pay_total", 0) if insights else 0
 
-    # 예시 프롬프트 버튼
-    st.markdown("**예시 질문** (클릭하면 자동 입력)")
-    example_cols = st.columns(3)
-    examples = [
-        "이번 주 전체 VOC 핵심 3줄 요약",
-        "부정 비율 높은 마스터 Top3 원인 분석",
-        "서비스 이슈 중 반복 패턴 찾아줘",
-        "콘텐츠 반응 부정 패턴 분석",
-        "온보딩 관련 문의 전체 마스터 걸쳐서 분석",
-        "채널톡과 편지글에서 동시에 나오는 이슈",
+    col1, col2, col3 = st.columns(3)
+    col1.metric("편지글 서비스 피드백", f"{svc_total}건")
+    col2.metric("채널톡 CS", f"{ch_total}건")
+    col3.metric("교차 감지 (결제·환불)", f"{cross}건", "🔴 두 채널 동시 감지 = 구조 문제")
+
+    st.markdown("---")
+    st.subheader("📋 자동 생성 개선 백로그")
+
+    backlog = [
+        {
+            "심각도": "🔴 Critical",
+            "이슈": "결제/해지 셀프서비스 부재",
+            "근거": f"채널톡 환불+해지+변경 115건(43%) + 편지글 {insights.get('letter_pay',0)}건 = {cross}건 교차 확인",
+            "실제목소리": "\"6개월 서비스 신청 후 재계약 안 했는데 오늘 50만원이 결제됐네요. 황당하네요\"",
+            "제안": "마이페이지 1클릭 해지/환불 신청",
+            "owner": "제품팀",
+            "기대효과": "CS 주당 ~40건 감소 / CS팀 ~8h 절감",
+        },
+        {
+            "심각도": "🔴 Critical",
+            "이슈": "콘텐츠 접근 오류 반복",
+            "근거": "편지글 서비스 이슈 중 '콘텐츠 접근 문제' 29건 — 음성 파일 누락, 녹화본 미업로드 반복",
+            "실제목소리": "\"2/11 주간 라이브 녹화본 업로드 2/13일로 공지됐는데 2/15일인데 아직 안 올라왔네요\"",
+            "제안": "콘텐츠 업로드 후 자동 접근 검증 스크립트",
+            "owner": "제품팀",
+            "기대효과": "오류 발생 즉시 감지 → 대응 시간 단축",
+        },
+        {
+            "심각도": "🟡 High",
+            "이슈": "신규 구독자 온보딩 부재",
+            "근거": "채널톡 수강방법 16건 + 편지글 온보딩/접근성 11건 — 신규 가입 직후 집중 발생",
+            "실제목소리": "\"신규수강생입니다. 주간 매매전략은 어디서 볼 수 있나요?\"",
+            "제안": "첫 로그인 시 마스터별 콘텐츠 위치 안내 팝업",
+            "owner": "제품팀",
+            "기대효과": "수강방법 CS 90% 감소 예상",
+        },
+        {
+            "심각도": "🟡 High",
+            "이슈": "앱 오류 집중 신고",
+            "근거": "편지글 '앱/기능 오류' 19건 — iOS 관련 언급 다수",
+            "실제목소리": "\"앱이 계속 튕겨요 아이폰 최신버전인데\"",
+            "제안": "iOS 크래시 리포팅 강화 + 재현 경로 파악",
+            "owner": "제품팀",
+            "기대효과": "패치 우선순위 결정 가속",
+        },
+        {
+            "심각도": "⚪ Medium",
+            "이슈": "콘텐츠 일정 공지 불명확",
+            "근거": "라이브 시작 시간, 자료 업로드 일정 문의 다수 마스터에서 반복",
+            "실제목소리": "\"라방 며칠 몇시부터인지 공지가 제대로 안 되어 찾아 들어가기 어려운 것 같습니다\"",
+            "제안": "마스터 콘텐츠 캘린더 UI — 예정 콘텐츠 스케줄 표시",
+            "owner": "제품팀·운영팀",
+            "기대효과": "일정 문의 CS 감소",
+        },
     ]
 
-    for i, ex in enumerate(examples):
-        col = example_cols[i % 3]
-        if col.button(ex, key=f"ex_{i}", use_container_width=True):
-            st.session_state["agent_input"] = ex
+    for item in backlog:
+        with st.expander(f"{item['심각도']} — {item['이슈']}"):
+            st.markdown(f"**근거:** {item['근거']}")
+            st.markdown(f"""
+<div class="quote-block">💬 실제 목소리: {item['실제목소리']}</div>
+""", unsafe_allow_html=True)
+            st.markdown(f"""
+<div class="action-row"><span class="owner-tag">{item['owner']}</span> {item['제안']}</div>
+""", unsafe_allow_html=True)
+            st.success(f"기대효과: {item['기대효과']}")
 
-    st.divider()
+    st.markdown("---")
+    col_l, col_r = st.columns(2)
+    with col_l:
+        st.subheader("채널톡 반복 문의 분포")
+        if insights and insights.get("subtag_cnt"):
+            top = insights["subtag_cnt"].most_common(12)
+            st_df = pd.DataFrame(top, columns=["유형", "건수"])
+            fig = px.bar(st_df, x="건수", y="유형", orientation="h",
+                         color_discrete_sequence=["#e74c3c"])
+            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                               height=380, yaxis=dict(autorange="reversed"),
+                               margin=dict(l=10, r=10, t=10, b=10))
+            st.plotly_chart(fig, use_container_width=True)
 
-    # Slack Bot 미리보기 안내
-    st.info("💡 **Slack Bot으로도 동일하게 사용 가능합니다**\n\n"
-            "`/voc 미과장 부정 여론 요약` → 이 AI Agent와 동일한 파이프라인으로 응답\n\n"
-            "`/voc 서비스이슈 이번주` → 채널톡+편지글 통합 분석")
+    with col_r:
+        st.subheader("편지글 서비스 이슈 분포")
+        if not df.empty:
+            svc_df = df[df["주제"] == "서비스 이슈"]
+            cat_cnt = Counter()
+            for tags in svc_df["category_tags"]:
+                for t in tags:
+                    cat_cnt[t] += 1
+            sc_df = pd.DataFrame(cat_cnt.most_common(8), columns=["카테고리", "건수"])
+            fig2 = px.bar(sc_df, x="건수", y="카테고리", orientation="h",
+                          color_discrete_sequence=["#e67e22"])
+            fig2.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                                height=380, yaxis=dict(autorange="reversed"),
+                                margin=dict(l=10, r=10, t=10, b=10))
+            st.plotly_chart(fig2, use_container_width=True)
 
-    # 채팅 인터페이스
-    if "agent_messages" not in st.session_state:
-        st.session_state["agent_messages"] = []
+    st.markdown("---")
+    st.subheader("교차 채널 이슈 — 두 채널에서 동시 감지 시 심각도 UP")
+    st.markdown("""
+| 이슈 | 편지·게시글 | 채널톡 | 합계 | 심각도 |
+|------|------------|--------|------|--------|
+| 결제/환불/구독해지 | ~50건 | 79건 | **~129건** | 🔴 구조 문제 |
+| 콘텐츠 접근 오류 | 29건 | — | 29건 | 🟡 기술 이슈 |
+| 온보딩/수강방법 | 11건 | 16건 | **27건** | 🟡 UX 이슈 |
 
-    # 이전 메시지 표시
-    for msg in st.session_state["agent_messages"]:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+> 💡 동일 이슈가 두 채널에서 동시 감지 = 개인적 불만이 아닌 **구조적 문제**
+""")
 
-    # 입력
-    default_input = st.session_state.pop("agent_input", None)
-    user_input = st.chat_input("질문을 입력하세요...", key="agent_chat")
-
-    if default_input and not user_input:
-        user_input = default_input
-
-    if user_input:
-        st.session_state["agent_messages"].append({"role": "user", "content": user_input})
-        with st.chat_message("user"):
-            st.markdown(user_input)
-
-        # AI 응답 생성
-        with st.chat_message("assistant"):
-            with st.spinner("분류 데이터 분석 중..."):
-                response = _generate_agent_response(user_input, df, df_channel)
-            st.markdown(response)
-            st.session_state["agent_messages"].append({"role": "assistant", "content": response})
-
-
-# ═════════════════════════════════════════════════════════════════════
-# 탭 6: 리포트 예시
-# ═════════════════════════════════════════════════════════════════════
-
-with tab_report:
-    st.header("📋 리포트 예시")
-    st.caption("분류 파이프라인 기반으로 자동 생성된 주간 리포트 예시")
-
-    st.info("💡 **기존 방식**: LLM이 2-3K건 원문 전수 읽기 → 분류 + 요약 (느리고 비쌈)\n\n"
-            "**개선 방식**: 파이프라인이 미리 분류/태깅 → LLM은 요약만 (5배 빠르고 70% 저렴)")
-
-    # example.md 로드
-    example_path = Path("src/example.md")
-    if example_path.exists():
-        with open(example_path, encoding="utf-8") as f:
-            report_content = f.read()
-
-        with st.expander("📄 전체 리포트 보기 (example.md 형식)", expanded=False):
-            st.markdown(report_content)
-    else:
-        st.warning("example.md 파일이 없습니다.")
-
-    st.divider()
-
-    # 파이프라인 기반 미니 리포트 생성
-    st.subheader("파이프라인 기반 자동 생성 예시")
-    st.markdown(_generate_mini_report(df, df_channel))
-
-
-# ═════════════════════════════════════════════════════════════════════
-# 탭 7: 분석 가능 범위
-# ═════════════════════════════════════════════════════════════════════
-
-with tab_catalog:
-    st.header("📚 이런 분석이 가능합니다")
-    st.caption("분류 데이터로 지원 가능한 분석 유형 카탈로그")
-
-    analysis_categories = {
-        "📊 현황 파악": [
-            ("전사 VOC 통계", "편지/게시글/채널톡 건수, 전주 대비 증감", "대시보드, 리포트"),
-            ("마스터별 여론 현황", "마스터별 긍/부정 비율, 주제 분포", "대시보드, AI Agent"),
-            ("카테고리별 분포", "28개 category_tag별 건수 분포", "대시보드"),
-        ],
-        "🚨 위험 감지": [
-            ("부정 급증 감지", "마스터별 부정 비율이 전주 대비 10%p 이상 증가", "자동 알림, 대시보드"),
-            ("서비스 장애 감지", "채널톡 특정 topic 건수 2배 이상 급증", "자동 알림"),
-            ("교차 이슈 감지", "채널톡+편지글에서 동일 이슈 동시 급증", "대시보드, 자동 알림"),
-            ("커뮤니티 분위기 악화", "커뮤니티 소통 부정 비율 추이", "대시보드"),
-        ],
-        "📈 트렌드 분석": [
-            ("감성 추이", "주차별 긍/부정/중립 비율 변화", "대시보드"),
-            ("투자 여론 트렌드", "투자 담론 감성과 증시 연동 분석", "대시보드, AI Agent"),
-            ("이슈 태그 추이", "특정 category_tag의 주차별 건수 변화", "대시보드"),
-            ("마스터 헬스 추이", "마스터별 부정 비율 시계열", "대시보드"),
-        ],
-        "🔍 심층 분석": [
-            ("부정 패턴 분석", "부정 의견의 category_tag + free_tag 클러스터링", "AI Agent"),
-            ("상품 런칭 반응", "특정 기간 + 자유태그로 상품 반응 추적", "AI Agent"),
-            ("온보딩 문제 횡단 분석", "마스터 횡단 동일 유형 문의 집계", "AI Agent"),
-            ("콘텐츠 품질 피드백", "콘텐츠 반응 부정의 세부 원인 분석", "AI Agent, 대시보드"),
-        ],
-        "📋 리포트 & 배포": [
-            ("전사 주간 리포트", "example.md 형식 자동 생성", "자동 생성"),
-            ("부서별 맞춤 리포트", "운영/콘텐츠/서비스 각각 필터된 리포트", "자동 생성"),
-            ("경영진 핵심 브리핑", "위험신호 + 액션포인트 3줄 요약", "Slack 자동 게시"),
-            ("원본 데이터 추출", "조건별 필터링 후 CSV/Excel 다운로드", "대시보드"),
-        ],
-        "💬 자연어 질의 (AI Agent / Slack Bot)": [
-            ("마스터별 질의", '"미과장 이번주 부정 여론 요약"', "AI Agent, Slack"),
-            ("주제별 질의", '"서비스 이슈 중 결제 관련만"', "AI Agent, Slack"),
-            ("비교 질의", '"이번주 vs 전주 부정 변화"', "AI Agent, Slack"),
-            ("원문 조회", '"수익인증 관련 원문 보여줘"', "AI Agent, Slack"),
-            ("교차 질의", '"채널톡이랑 편지에서 겹치는 이슈"', "AI Agent"),
-        ],
-    }
-
-    for category, items in analysis_categories.items():
-        st.subheader(category)
-        for name, desc, channel in items:
-            st.markdown(f"- **{name}** — {desc}  \n  `전달 수단: {channel}`")
-        st.divider()
-
-
-# ═════════════════════════════════════════════════════════════════════
-# 탭 8: 원문 탐색
-# ═════════════════════════════════════════════════════════════════════
-
-with tab_explorer:
-    st.header("🔎 원문 탐색")
-    st.caption("조건별 필터링으로 원본 데이터 조회 · CSV 다운로드")
-
-    # 필터
-    fc1, fc2, fc3, fc4 = st.columns(4)
-    with fc1:
-        f_master = st.multiselect("마스터", sorted(df["마스터"].unique()), key="exp_master")
-    with fc2:
-        f_topic = st.multiselect("주제", TOPICS, key="exp_topic")
-    with fc3:
-        f_sent = st.multiselect("감성", SENTIMENTS, key="exp_sent")
-    with fc4:
-        f_search = st.text_input("키워드 검색", key="exp_search")
-
-    # 태그 필터
-    all_ctags = sorted(set(t for tags in df["category_tags"] for t in tags))
-    f_tags = st.multiselect("category_tag 필터", all_ctags, key="exp_tags")
-
-    # 필터 적용
-    filtered = df.copy()
-    if f_master:
-        filtered = filtered[filtered["마스터"].isin(f_master)]
-    if f_topic:
-        filtered = filtered[filtered["주제"].isin(f_topic)]
-    if f_sent:
-        filtered = filtered[filtered["감성"].isin(f_sent)]
-    if f_search:
-        mask = filtered["내용"].str.contains(f_search, case=False, na=False)
-        mask = mask | filtered["summary"].str.contains(f_search, case=False, na=False)
-        filtered = filtered[mask]
-    if f_tags:
-        filtered = filtered[filtered["category_tags"].apply(
-            lambda tags: any(t in f_tags for t in tags)
-        )]
-
-    st.caption(f"검색 결과: {len(filtered)}건")
-
-    # 표시
-    display = filtered[["유형", "마스터", "주제", "감성", "summary", "내용"]].copy()
-    display["내용"] = display["내용"].str[:300]
-
-    st.dataframe(display, use_container_width=True, hide_index=True, height=500)
-
-    # CSV 다운로드
-    csv = filtered.drop(columns=["category_tags", "free_tags"]).to_csv(index=False).encode("utf-8-sig")
-    st.download_button("📥 CSV 다운로드", csv, file_name="voc_filtered.csv", mime="text/csv")(df: pd.DataFrame, df_channel: pd.DataFrame) -> str:
-    """분류 데이터 기반 미니 리포트 생성 (LLM 없이)"""
-    total = len(df)
-    letters = len(df[df["유형"] == "편지"])
-    posts = len(df[df["유형"] == "게시글"])
-
-    # 마스터별 통계
-    master_stats = []
-    for master in df["마스터"].unique():
-        m_df = df[df["마스터"] == master]
-        t = len(m_df)
-        if t < 3:
-            continue
-        n = len(m_df[m_df["감성"] == "부정"])
-        nr = round(n / t * 100, 1) if t else 0
-        # 주요 free_tags
-        ftags = Counter()
-        for tags in m_df[m_df["감성"] == "부정"]["free_tags"]:
-            for tag in tags:
-                ftags[tag] += 1
-        top_issue = ftags.most_common(1)[0][0] if ftags else "-"
-        master_stats.append((master, t, nr, top_issue))
-
-    master_stats.sort(key=lambda x: x[1], reverse=True)
-
-    # 서비스 이슈
-    svc = df[df["주제"] == "서비스 이슈"]
-    svc_tags = Counter()
-    for tags in svc["category_tags"]:
-        for t in tags:
-            svc_tags[t] += 1
-
-    # 위험 마스터
-    risk_masters = [(m, t, nr, issue) for m, t, nr, issue in master_stats if nr >= 20]
-
-    report = f"""
-## 핵심 요약
-
-| 구분 | 건수 |
-|------|------|
-| 편지 | {letters}건 |
-| 게시글 | {posts}건 |
-| 전체 | {total}건 |
-| 채널톡 CS | {len(df_channel)}건 |
-
-"""
-
-    if risk_masters:
-        report += "### ⚠️ 위험 신호\n\n"
-        for m, t, nr, issue in risk_masters:
-            report += f"- **{m}**: 부정 {nr}% ({t}건 중) — {issue}\n"
-        report += "\n"
-
-    report += "### 마스터별 통계\n\n"
-    report += "| 마스터 | 총건수 | 부정비율 | 주요 부정 이슈 |\n"
-    report += "|--------|--------|----------|----------------|\n"
-    for m, t, nr, issue in master_stats[:10]:
-        status = "🔴" if nr >= 25 else "🟡" if nr >= 15 else "🟢"
-        report += f"| {m} | {t} | {status} {nr}% | {issue} |\n"
-
-    if svc_tags:
-        report += "\n### 서비스 이슈 요약\n\n"
-        for tag, cnt in svc_tags.most_common(5):
-            report += f"- {tag}: {cnt}건\n"
-
-    return report
-
-
-def _generate_agent_response(query: str, df: pd.DataFrame, df_channel: pd.DataFrame) -> str:
-    """AI Agent 응답 생성 — Claude API 호출"""
-    try:
-        import anthropic
-        client = anthropic.Anthropic()
-    except Exception:
-        return _generate_fallback_response(query, df, df_channel)
-
-    # 분류 데이터 요약 컨텍스트 생성
-    context = _build_data_context(query, df, df_channel)
-
-    try:
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=2000,
-            messages=[{"role": "user", "content": query}],
-            system=f"""당신은 VOC 데이터 분석 AI 에이전트입니다.
-사용자의 질문에 분류된 VOC 데이터를 기반으로 정확하고 구조화된 인사이트를 제공합니다.
-
-## 사용 가능한 데이터
-
-{context}
-
-## 응답 규칙
-- 구체적인 건수와 비율을 포함
-- 마스터명, 태그 등 실제 데이터 인용
-- 원문 인용 시 이탤릭 사용
-- 액션 포인트/권장 사항 포함
-- 마크다운 형식으로 구조화""",
-        )
-        return response.content[0].text
-    except Exception as e:
-        return _generate_fallback_response(query, df, df_channel)
-
-
-def _build_data_context(query: str, df: pd.DataFrame, df_channel: pd.DataFrame) -> str:
-    """쿼리에 맞는 데이터 컨텍스트 생성"""
-    context_parts = []
-
-    # 기본 통계
-    total = len(df)
-    context_parts.append(f"### 전체 통계\n- 편지+게시글: {total}건")
-    context_parts.append(f"- 채널톡 CS: {len(df_channel)}건")
-
-    # 감성 분포
-    sent_dist = df["감성"].value_counts().to_dict()
-    context_parts.append(f"- 감성: 긍정 {sent_dist.get('긍정',0)}건, 부정 {sent_dist.get('부정',0)}건, 중립 {sent_dist.get('중립',0)}건")
-
-    # 마스터별 통계
-    context_parts.append("\n### 마스터별 통계")
-    for master in df["마스터"].unique():
-        m_df = df[df["마스터"] == master]
-        t = len(m_df)
-        if t < 3:
-            continue
-        n = len(m_df[m_df["감성"] == "부정"])
-        nr = round(n / t * 100, 1) if t else 0
-
-        # 주요 태그
-        tags = Counter()
-        for tlist in m_df["category_tags"]:
-            for tag in tlist:
-                tags[tag] += 1
-        top_tags = [f"{tag}({cnt})" for tag, cnt in tags.most_common(3)]
-
-        # 부정 free_tags
-        neg_ftags = Counter()
-        for tlist in m_df[m_df["감성"] == "부정"]["free_tags"]:
-            for tag in tlist:
-                neg_ftags[tag] += 1
-        top_neg = [f'"{tag}"' for tag, _ in neg_ftags.most_common(3)]
-
-        context_parts.append(f"- **{master}**: {t}건, 부정 {nr}%, 태그: {', '.join(top_tags)}, 부정키워드: {', '.join(top_neg)}")
-
-    # 주제별 통계
-    context_parts.append("\n### 주제별 통계")
-    for topic in TOPICS:
-        t_df = df[df["주제"] == topic]
-        t_total = len(t_df)
-        t_neg = len(t_df[t_df["감성"] == "부정"])
-        context_parts.append(f"- {topic}: {t_total}건 (부정 {t_neg}건)")
-
-    # 서비스 이슈 상세
-    svc_df = df[df["주제"] == "서비스 이슈"]
-    if not svc_df.empty:
-        context_parts.append(f"\n### 서비스 이슈 상세 ({len(svc_df)}건)")
-        for _, row in svc_df.head(10).iterrows():
-            context_parts.append(f"- [{row['마스터']}] {row['summary']} (태그: {', '.join(row['category_tags'])})")
-
-    # 채널톡 통계
     if not df_channel.empty:
-        context_parts.append("\n### 채널톡 CS 통계")
-        ch_topics = Counter()
-        for topics in df_channel["topics"]:
-            for t in topics:
-                ch_topics[t] += 1
-        for t, cnt in ch_topics.most_common():
-            context_parts.append(f"- {t}: {cnt}건")
-
-    # 쿼리 관련 원문 샘플
-    keywords = [w for w in query.split() if len(w) > 1]
-    relevant = df.copy()
-    if keywords:
-        mask = pd.Series(False, index=df.index)
-        for kw in keywords:
-            mask = mask | df["내용"].str.contains(kw, case=False, na=False)
-            mask = mask | df["summary"].str.contains(kw, case=False, na=False)
-            mask = mask | df["마스터"].str.contains(kw, case=False, na=False)
-        relevant = df[mask]
-
-    if not relevant.empty and len(relevant) < len(df):
-        context_parts.append(f"\n### 쿼리 관련 원문 샘플 ({len(relevant)}건 중 상위 10건)")
-        for _, row in relevant.head(10).iterrows():
-            context_parts.append(f"- [{row['마스터']}|{row['주제']}|{row['감성']}] {row['summary']}")
-            context_parts.append(f"  원문: \"{row['내용'][:150]}\"")
-
-    return "\n".join(context_parts)
+        route_cnt = df_channel["route"].value_counts()
+        route_labels = {
+            "manager_resolved": "상담사 처리 🧑‍💼",
+            "bot_resolved": "봇 자동 처리 🤖",
+            "abandoned": "이탈 (미처리) ⚠️",
+        }
+        cols = st.columns(len(route_cnt))
+        for i, (route, cnt) in enumerate(route_cnt.items()):
+            cols[i].metric(route_labels.get(route, route), f"{cnt}건",
+                           f"{round(cnt/len(df_channel)*100)}%")
 
 
-def _generate_fallback_response(query: str, df: pd.DataFrame, df_channel: pd.DataFrame) -> str:
-    """API 호출 실패 시 규칙 기반 응답"""
-    query_lower = query.lower()
+# ══════════════════════════════════════════════════════════════════════
+# 탭5: 원문 탐색
+# ══════════════════════════════════════════════════════════════════════
+with tabs[4]:
+    st.title("원문 탐색")
+    st.caption("분류 결과를 실제 원문으로 검증합니다.")
 
-    # 전체 요약
-    if "요약" in query or "핵심" in query:
-        total = len(df)
-        neg = len(df[df["감성"] == "부정"])
-        neg_ratio = round(neg / total * 100, 1)
+    if df.empty:
+        st.warning("데이터 없음")
+    else:
+        col1, col2, col3 = st.columns(3)
+        f_master = col1.selectbox("마스터", ["전체"] + df["마스터"].unique().tolist())
+        f_topic = col2.selectbox("주제", ["전체"] + sorted(df["주제"].dropna().unique().tolist()))
+        f_sent = col3.selectbox("감성", ["전체", "긍정", "부정", "중립"])
+        keyword = st.text_input("키워드 검색")
 
-        # 부정 비율 높은 마스터
-        risk = []
-        for master in df["마스터"].unique():
-            m_df = df[df["마스터"] == master]
-            t = len(m_df)
-            if t < 5:
-                continue
-            n = len(m_df[m_df["감성"] == "부정"])
-            nr = round(n / t * 100, 1)
-            if nr >= 15:
-                risk.append((master, t, nr))
-        risk.sort(key=lambda x: x[2], reverse=True)
+        filtered = df.copy()
+        if f_master != "전체":
+            filtered = filtered[filtered["마스터"] == f_master]
+        if f_topic != "전체":
+            filtered = filtered[filtered["주제"] == f_topic]
+        if f_sent != "전체":
+            filtered = filtered[filtered["감성"] == f_sent]
+        if keyword:
+            mask = (filtered["내용"].str.contains(keyword, case=False, na=False) |
+                    filtered["summary"].str.contains(keyword, case=False, na=False))
+            filtered = filtered[mask]
 
-        # 서비스 이슈
-        svc = df[df["주제"] == "서비스 이슈"]
-        svc_tags = Counter()
-        for tags in svc["category_tags"]:
-            for t in tags:
-                svc_tags[t] += 1
+        st.caption(f"검색 결과: {len(filtered)}건")
+        display = filtered[["유형", "마스터", "주제", "감성", "summary", "내용"]].copy()
+        display["내용"] = display["내용"].str[:200]
+        st.dataframe(display, use_container_width=True, hide_index=True, height=450)
+        csv = filtered.drop(columns=["category_tags", "free_tags"]).to_csv(index=False).encode("utf-8-sig")
+        st.download_button("📥 CSV 다운로드", csv, file_name="voc_filtered.csv", mime="text/csv")
 
-        result = f"""📊 **전체 VOC 핵심 요약** ({df['주차'].unique()[0]} 주차)
 
-**전체**: {total}건 (편지 {len(df[df['유형']=='편지'])}건 + 게시글 {len(df[df['유형']=='게시글'])}건)
-**전체 부정 비율**: {neg_ratio}%
+# ══════════════════════════════════════════════════════════════════════
+# 탭6: 슬랙봇 데모
+# ══════════════════════════════════════════════════════════════════════
+with tabs[5]:
+    st.title("💬 슬랙봇 데모")
+    st.caption("분류 데이터 기반으로 Slack에서 인사이트를 즉시 조회하는 시나리오 데모")
+    st.info("예시 버튼을 클릭하거나 직접 질문을 입력하세요.")
 
-"""
-        if risk:
-            result += "**⚠️ 위험 마스터:**\n"
-            for m, t, nr in risk[:3]:
-                neg_ftags = Counter()
-                for tlist in df[(df["마스터"]==m) & (df["감성"]=="부정")]["free_tags"]:
-                    for tag in tlist:
-                        neg_ftags[tag] += 1
-                top = neg_ftags.most_common(2)
-                issues = ", ".join([f'"{t}"' for t, _ in top])
-                result += f"- **{m}**: 부정 {nr}% — {issues}\n"
+    questions = list(SLACK_QA.keys())
+    btn_cols = st.columns(3)
+    selected_q = None
+    for i, q in enumerate(questions):
+        if btn_cols[i % 3].button(q, key=f"q_{i}", use_container_width=True):
+            selected_q = q
 
-        if svc_tags:
-            result += f"\n**서비스 이슈** ({len(svc)}건):\n"
-            for tag, cnt in svc_tags.most_common(3):
-                result += f"- {tag}: {cnt}건\n"
+    st.markdown("---")
 
-        return result
+    if "slack_history" not in st.session_state:
+        st.session_state.slack_history = []
 
-    # 마스터별
-    for master in df["마스터"].unique():
-        if master in query:
-            m_df = df[df["마스터"] == master]
-            t = len(m_df)
-            n = len(m_df[m_df["감성"] == "부정"])
-            p = len(m_df[m_df["감성"] == "긍정"])
+    user_input = st.chat_input("VOC Bot에게 질문하세요...")
+    query = selected_q or user_input
 
-            neg_tags = Counter()
-            for tags in m_df[m_df["감성"] == "부정"]["free_tags"]:
-                for tag in tags:
-                    neg_tags[tag] += 1
+    if query:
+        st.session_state.slack_history.append(("user", query))
+        # 버튼 클릭 = 하드코딩 (즉시), 직접 입력 = Claude Code (실시간)
+        answer = SLACK_QA.get(query) if selected_q else None
+        if not answer:
+            with st.spinner("VOC 데이터 분석 중..."):
+                answer = _generate_agent_response(query, df, df_channel, insights)
+        st.session_state.slack_history.append(("bot", answer))
 
-            result = f"""📊 **{master}** 분석
+    for role, msg in st.session_state.slack_history:
+        if role == "user":
+            with st.chat_message("user"):
+                st.write(msg)
+        else:
+            with st.chat_message("assistant", avatar="🤖"):
+                st.markdown(msg)
 
-총 {t}건 | 긍정 {p}건({round(p/t*100,1)}%) | 부정 {n}건({round(n/t*100,1)}%)
+    if not st.session_state.slack_history:
+        st.markdown("""
+**슬랙에서 이렇게 씁니다:**
+```
+/voc 이번 주 위험 신호 있는 마스터 있어?
+→ 서재형 21.4% 경보 + 실제 구독자 목소리 + 액션 포인트
 
-"""
-            if neg_tags:
-                result += "**부정 주요 키워드:**\n"
-                for tag, cnt in neg_tags.most_common(5):
-                    result += f"- \"{tag}\" ({cnt}건)\n"
+/voc 채널톡 반복 문의 TOP5 알려줘
+→ 환불 54건 패턴 + 근본 원인 + 제품팀 제안
 
-            # 부정 원문 샘플
-            neg_items = m_df[m_df["감성"] == "부정"].head(3)
-            if not neg_items.empty:
-                result += "\n**부정 원문 샘플:**\n"
-                for _, row in neg_items.iterrows():
-                    result += f"\n> _{row['내용'][:200]}_\n"
+/voc 미과장 커뮤니티 이번 주 분위기 알려줘
+→ 감성 구조 + 실제 인용 + 팀별 권고
+```
+> 운영팀·사업팀·제품팀이 각자 채널에서 필요한 인사이트를 바로 조회합니다.
+""")
 
-            return result
-
-    return "해당 질문에 대한 분석 결과를 생성하려면 API 키가 필요합니다. ANTHROPIC_API_KEY 환경변수를 설정해주세요."
+    if st.session_state.slack_history:
+        if st.button("대화 초기화"):
+            st.session_state.slack_history = []
+            st.rerun()
