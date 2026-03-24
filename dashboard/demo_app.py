@@ -494,42 +494,48 @@ st.markdown("""
 <style>
 .signal-card-red {
     border-left: 5px solid #e74c3c;
-    background: #1e0a0a;
+    background: #2a0f0f;
     padding: 20px 24px;
     border-radius: 0 10px 10px 0;
     margin: 10px 0;
+    color: #f0d0d0;
 }
 .signal-card-yellow {
     border-left: 5px solid #f39c12;
-    background: #1e1700;
+    background: #2a2000;
     padding: 20px 24px;
     border-radius: 0 10px 10px 0;
     margin: 10px 0;
+    color: #f0e0c0;
 }
 .signal-card-green {
     border-left: 5px solid #2ecc71;
-    background: #0a1e0f;
+    background: #0f2a18;
     padding: 20px 24px;
     border-radius: 0 10px 10px 0;
     margin: 10px 0;
+    color: #d0f0d8;
 }
+.signal-card-red b, .signal-card-yellow b, .signal-card-green b { color: #ffffff; }
+.signal-card-red small, .signal-card-yellow small, .signal-card-green small { color: #ddd; }
 .quote-block {
-    background: #111;
-    border-left: 3px solid #555;
+    background: #1a1a1a;
+    border-left: 3px solid #777;
     padding: 12px 16px;
     margin: 10px 0;
     border-radius: 0 6px 6px 0;
     font-style: italic;
-    color: #ccc;
+    color: #e8e8e8;
     font-size: 0.92rem;
 }
 .action-row {
-    background: #0a1628;
-    border: 1px solid #2a4a7a;
+    background: #0f1e35;
+    border: 1px solid #3a5a8a;
     border-radius: 6px;
     padding: 10px 14px;
     margin: 6px 0;
     font-size: 0.9rem;
+    color: #d0e0f0;
 }
 .owner-tag {
     display: inline-block;
@@ -579,11 +585,10 @@ with tabs[0]:
     prev_total = insights.get("prev_total", 0) if insights else 0
     wow_pct = f"{wow_delta:+,}건 ({round(wow_delta/prev_total*100,1):+.1f}%)" if prev_total else ""
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     col1.metric("분석 건수 (이번 주)", f"{len(df)+len(df_channel):,}건", wow_pct)
     col2.metric("리포트 생성", "< 2분", "기존 수동 8시간 → 98% 단축")
-    col3.metric("분류 정확도", "84.1%", "KcELECTRA Fine-tuned")
-    col4.metric("서브태그 미분류율", "2.9%", "채널톡 270건 기준")
+    col3.metric("데이터 소스", "2개 채널", "편지·게시글 + 채널톡 CS")
 
     st.markdown("---")
     st.subheader("📌 이번 주 3가지 신호")
@@ -1001,6 +1006,47 @@ with tabs[3]:
         for i, (route, cnt) in enumerate(route_cnt.items()):
             cols[i].metric(route_labels.get(route, route), f"{cnt}건",
                            f"{round(cnt/len(df_channel)*100)}%")
+
+    st.markdown("---")
+    st.subheader("채널톡 다중 주제 분석 — 하나의 문의에 여러 주제가 포함된 경우")
+    st.caption("다중 주제가 반복되면 서비스 구조 문제. 유저가 한 번에 해결하지 못해서 여러 주제를 말하는 것.")
+
+    if not df_channel.empty:
+        # 주제 개수 분포
+        topic_count_dist = Counter()
+        combo_counts = Counter()
+        for _, row in df_channel.iterrows():
+            topics = row.get("topics", [])
+            n = len(topics) if isinstance(topics, list) else 0
+            topic_count_dist[n] += 1
+            if n >= 2:
+                combo_counts[" + ".join(sorted(topics))] += 1
+
+        col1, col2, col3 = st.columns(3)
+        single = topic_count_dist.get(1, 0)
+        multi = sum(v for k, v in topic_count_dist.items() if k >= 2)
+        col1.metric("단일 주제", f"{single}건", f"{round(single/len(df_channel)*100)}%")
+        col2.metric("다중 주제", f"{multi}건", f"{round(multi/len(df_channel)*100)}%")
+        col3.metric("가장 많은 조합", combo_counts.most_common(1)[0][0] if combo_counts else "—",
+                    f"{combo_counts.most_common(1)[0][1]}건" if combo_counts else "")
+
+        if combo_counts:
+            st.markdown("**다중 주제 조합 분포:**")
+            combo_rows = []
+            for combo, cnt in combo_counts.most_common(8):
+                pct = round(cnt / multi * 100, 1) if multi else 0
+                combo_rows.append({"주제 조합": combo, "건수": cnt, "다중 주제 중 비율": f"{pct}%"})
+            st.dataframe(pd.DataFrame(combo_rows), use_container_width=True, hide_index=True)
+
+            top_combo = combo_counts.most_common(1)[0]
+            if "결제" in top_combo[0] and "구독" in top_combo[0]:
+                st.markdown(f"""
+<div class="signal-card-yellow">
+<b>🟡 구조 문제 — "{top_combo[0]}" {top_combo[1]}건 ({round(top_combo[1]/multi*100)}%)</b><br>
+<small>환불과 해지를 유저가 구분하지 못함 → 한 대화에서 두 가지를 모두 요청. 셀프서비스 UX로 해결 가능.</small>
+<div class="action-row"><span class="owner-tag">제품팀</span> 해지 시 환불 옵션 동시 제공 = 다중 문의 68% 감소 기대</div>
+</div>
+""", unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════
