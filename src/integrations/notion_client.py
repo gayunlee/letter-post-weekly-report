@@ -161,10 +161,25 @@ class NotionReportClient:
                 i += 1
                 continue
 
+            # (총합: → 앞에 빈 줄 추가 (핵심 이슈와 구분)
+            if line.startswith('(총합:'):
+                if blocks and blocks[-1].get("type") == "paragraph" and blocks[-1]["paragraph"]["rich_text"]:
+                    blocks.append(self._create_paragraph(""))
+                blocks.append(self._create_paragraph(line))
+                i += 1
+                continue
+
             # 볼드 텍스트로 시작하는 경우 (**...**) → 단락 제목이므로 앞에 빈 줄 추가
             if line.startswith('**'):
                 if blocks and blocks[-1].get("type") not in ("divider", "heading_1", "heading_2", "heading_3"):
                     blocks.append(self._create_paragraph(""))
+                blocks.append(self._create_paragraph(line))
+                i += 1
+                continue
+
+            # ■ 로 시작하는 섹션 제목 → 앞에 무조건 빈 줄 추가
+            if line.startswith('■'):
+                blocks.append(self._create_paragraph(""))
                 blocks.append(self._create_paragraph(line))
                 i += 1
                 continue
