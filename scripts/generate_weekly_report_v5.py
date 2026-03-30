@@ -1,0 +1,171 @@
+"""주간 리포트 생성 (v5 4분류) — 원본 조회 → v5 분류 → 리포트
+
+voc_labelled에 분류 데이터가 없는 기간도 처리 가능.
+BigQuery 원본 → Haiku v5 분류 → 통계 분석 → 리포트 생성.
+
+사용법:
+    python scripts/generate_weekly_report_v5.py                    # 지난 주
+    python scripts/generate_weekly_report_v5.py --start 2026-03-23 --end 2026-03-30
+"""
+import sys
+import os
+import argparse
+import time
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from dotenv import load_dotenv
+load_dotenv()
+
+from src.bigquery.client import BigQueryClient
+from src.bigquery.queries import WeeklyDataQuery
+from src.classifier_v5.classifier import V5Classifier
+from src.classifier_v5.bedrock_classifier import BedrockV5Classifier
+from src.reporter.analytics import WeeklyAnalytics
+from src.reporter.report_generator import ReportGenerator
+
+
+def classify_items(items, content_field, classifier):
+    """v5 분류 결과를 item에 직접 매핑 (analytics 호환)"""
+    if not items:
+        return items
+
+    classifier.classify_batch(items, content_field=content_field)
+
+    # classification 결과를 item 최상위 필드로 복사 (analytics 호환)
+    for item in items:
+        cls = item.get("classification", {})
+        item["topic"] = cls.get("topic", "")
+        item["subtag"] = cls.get("subtag", "")
+        item["sentiment"] = cls.get("sentiment", "")
+        item["summary"] = cls.get("summary", "")
+        item["tags"] = cls.get("tags", [])
+        item["confidence"] = cls.get("confidence", 0.0)
+
+    return items
+
+
+def main():
+    parser = argparse.ArgumentParser(description="주간 리포트 생성 (v5)")
+    parser.add_argument("--start", help="시작일 (YYYY-MM-DD)")
+    parser.add_argument("--end", help="종료일 (YYYY-MM-DD)")
+    parser.add_argument("--workers", type=int, default=10)
+    parser.add_argument("--bedrock", action="store_true", help="Bedrock Haiku 사용 (Anthropic API 대신)")
+    args = parser.parse_args()
+
+    print("=" * 60)
+    print("  주간 리포트 생성 (v5 4분류)")
+    print("=" * 60)
+
+    # BigQuery 클라이언트
+    bq_client = BigQueryClient()
+    query = WeeklyDataQuery(bq_client)
+
+    # 날짜 범위
+    if args.start and args.end:
+        start_date, end_date = args.start, args.end
+    else:
+        start_date, end_date = WeeklyDataQuery.get_last_week_range()
+
+    print(f"\n  대상 기간: {start_date} ~ {end_date}")
+
+    # 1. 원본 데이터 조회
+    print(f"\n  Phase 1: BigQuery 원본 조회")
+    master_info = query.get_master_info()
+    data = query.get_weekly_data(start_date, end_date)
+    letters = data["letters"]
+    posts = data["posts"]
+
+    # 마스터 정보 매핑
+    for item in letters:
+        mid = item.get("masterId", "")
+        if mid in master_info:
+            item["masterName"] = master_info[mid].get("displayName") or master_info[mid].get("name", "Unknown")
+    for item in posts:
+        mid = item.get("postBoardId", "")
+        if mid in master_info:
+            item["masterName"] = master_info[mid].get("displayName") or master_info[mid].get("name", "Unknown")
+
+    print(f"    편지 {len(letters)}건, 게시글 {len(posts)}건")
+
+    # 2. v5 분류
+    print(f"\n  Phase 2: v5 4분류 (Bedrock Haiku)")
+    bedrock_workers = min(args.workers, 5)  # Bedrock throttling 방지
+    classifier = BedrockV5Classifier(model_id="us.anthropic.claude-3-5-haiku-20241022-v1:0", max_workers=bedrock_workers)
+    start_time = time.time()
+
+    classify_items(letters, "message", classifier)
+    classify_items(posts, "textBody", classifier)
+
+    cost = classifier.get_cost_report()
+    elapsed = time.time() - start_time
+    print(f"    분류 완료: {cost['total_items']}건, {elapsed:.1f}초, ${cost['cost_usd']}")
+
+    # 기타 재분류
+    all_items_for_reclassify = [
+        {"text": item.get("message", ""), "classification": item.get("classification", {})}
+        for item in letters
+    ] + [
+        {"text": item.get("textBody", ""), "classification": item.get("classification", {})}
+        for item in posts
+    ]
+    _, new_candidates = classifier.reclassify_others(all_items_for_reclassify)
+
+    # 3. 전주 데이터 (건수 비교용 — 분류 불필요)
+    print(f"\n  Phase 3: 전주 건수 조회")
+    from datetime import datetime, timedelta
+    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    prev_start = (start_dt - timedelta(days=7)).strftime("%Y-%m-%d")
+    prev_end = start_date
+    print(f"    전주 기간: {prev_start} ~ {prev_end}")
+
+    prev_data = query.get_weekly_data(prev_start, prev_end)
+    prev_letters = prev_data["letters"]
+    prev_posts = prev_data["posts"]
+
+    if prev_letters or prev_posts:
+        print(f"    전주: 편지 {len(prev_letters)}건, 게시글 {len(prev_posts)}건 (건수만 사용)")
+    else:
+        prev_letters = None
+        prev_posts = None
+        print(f"    전주 데이터 없음")
+
+    # 4. 통계 분석
+    print(f"\n  Phase 4: 통계 분석")
+    analytics = WeeklyAnalytics()
+    stats = analytics.analyze_weekly_data(
+        letters, posts,
+        previous_letters=prev_letters,
+        previous_posts=prev_posts,
+    )
+
+    total = stats["total_stats"]["this_week"]
+    print(f"    전체: 편지 {total['letters']}건, 게시글 {total['posts']}건")
+
+    category_stats = stats["category_stats"]
+    print(f"    토픽별:")
+    for topic, count in sorted(category_stats.items(), key=lambda x: x[1], reverse=True):
+        print(f"      {topic}: {count}건")
+
+    feedbacks = stats.get("service_feedbacks", [])
+    print(f"    피드백: {len(feedbacks)}건")
+
+    # 5. 리포트 생성
+    print(f"\n  Phase 5: 리포트 생성")
+    output_dir = os.getenv("REPORT_OUTPUT_DIR", "./reports")
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, f"weekly_report_v5_{start_date}.md")
+
+    generator = ReportGenerator()
+    report = generator.generate_report(stats, start_date, end_date, output_path=output_path)
+
+    total_cost = classifier.get_cost_report()
+    print(f"\n  저장: {output_path}")
+    print(f"  총 비용: ${total_cost['cost_usd']}")
+    print(f"\n{'='*60}")
+    print(f"  완료!")
+    print(f"{'='*60}")
+
+
+if __name__ == "__main__":
+    main()

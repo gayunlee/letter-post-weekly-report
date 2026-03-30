@@ -91,18 +91,6 @@ class ReportGenerator:
 
 ---
 
-### 분류 기준
-
-| 카테고리 | 설명 |
-| -------- | ---- |
-| 운영 피드백 | 결제/환불, 구독/멤버십, 세미나, 가격 정책 등 운영 관련 |
-| 서비스 피드백 | 앱 오류, 결제 오류, 로그인 문제, 기능 개선 요청 등 |
-| 콘텐츠 반응 | 콘텐츠 품질, 마스터 소통/태도, 강의/리포트 반응 |
-| 투자 담론 | 포트폴리오/종목 전략, 시장 전망, 수익/손실, 매매 타이밍 |
-| 기타 | 인사/안부, 축하/격려, 일상 공유 |
-
----
-
 """
 
     def _generate_top3_ranking(self, stats: Dict[str, Any]) -> str:
@@ -234,6 +222,7 @@ class ReportGenerator:
 - 데이터에 실제로 나온 내용만 언급. 추측이나 해석 금지
 - "커뮤니티 활성화", "소통 강화", "정서적 유대", "비관적 인식이 확산" 등 추상적·미사여구 표현 금지
 - 각 이슈는 제목 + 2-3문장 설명으로 구성. 구체적 종목명, 사건, 수치를 포함할 것
+- ⚠️ 톤 주의: "강한 불신", "강력한 요구", "납득하지 않는 태도", "고조", "팽배" 등 자극적·공격적 표현 금지. 중립적·완만한 톤으로 작성. (예: "불만이 고조" → "아쉬움을 표현", "강한 불신" → "신뢰도에 대한 의문")
 - ~합니다체로 작성
 
 ## 형식
@@ -275,7 +264,7 @@ class ReportGenerator:
         ]
         minor_masters = [
             (name, data) for name, data in sorted_masters
-            if 0 < data["this_week"]["total"] < MIN_THRESHOLD
+            if data["this_week"]["total"] < MIN_THRESHOLD
         ]
 
         # LLM API 병렬 호출로 인사이트 생성
@@ -329,18 +318,10 @@ class ReportGenerator:
 
 > {insight['summary']}
 
-| 구분   | 이번 주 | 전주 | 증감 |
-| ------ | ------- | ---- | ---- |
-| 편지   | {this_week['letters']} | {last_week['letters']} | {self._format_change(change_data['letters'])} |
-| 게시글 | {this_week['posts']} | {last_week['posts']} | {self._format_change(change_data['posts'])} |
-| 총합   | {this_week['total']} | {last_week['total']} | {self._format_change(change_data['total'])} |
-
 ■ 주요 내용
-
 {insight['main_content']}
 
 ■ 서비스 피드백
-
 {insight['service_feedback']}
 
 ---
@@ -381,15 +362,15 @@ class ReportGenerator:
         negative_contents = []
         positive_contents = []
         neutral_contents = []
-        feedback_contents = []  # topic == "대응 필요"
+        feedback_contents = []  # topic in ("피드백", "대응 필요")
 
         for c in contents:
             topic = c.get("topic", "")
             sentiment = c.get("sentiment", "")
-            summary = c.get("summary", "")
-            text = summary or c.get("content", "")
+            # 원문 우선 사용 (summary는 LLM 요약이라 구체성 떨어짐)
+            text = c.get("content", "") or c.get("summary", "")
 
-            if topic == "대응 필요":
+            if topic in ("피드백", "대응 필요"):
                 feedback_contents.append(text)
             elif sentiment == "부정":
                 negative_contents.append(f"[부정] {text}")
@@ -434,30 +415,30 @@ class ReportGenerator:
 ## 작성 원칙
 - 데이터에 실제로 나온 내용만 언급할 것. 추측이나 해석을 넣지 말 것.
 - "커뮤니티 활성화", "소통 강화", "긍정적 분위기" 등 추상적·미사여구 표현 금지.
-- 테마 제목은 실제 데이터 내용을 반영하는 구체적인 제목으로 작성 (예: "수익인증 요구 및 투명성 논란", "3기 오프라인 전우회 참여 후기")
-- 인용문은 원문 그대로 사용. 요약하거나 다듬지 말 것.
+- ⚠️ 톤 주의: "강한 불신", "강력한 요구", "납득하지 않는 태도", "고조", "팽배", "극심한 불만" 등 자극적·공격적 표현 금지. 담당 부서가 읽는 리포트이므로 중립적·완만한 톤으로 작성. (예: "불만이 고조" → "아쉬움을 표현하는 의견이 확인됩니다", "강한 불신" → "신뢰도에 대한 의문이 제기되고 있습니다")
+- 테마 제목도 자극적이지 않게 (예: "투명성 논란" → "투자 성과 공개에 대한 의견", "신뢰 붕괴" → "투자 전략 방향에 대한 고민")
 - 건수를 추정하거나 표기하지 말 것. 테마 제목에 건수를 넣지 말 것.
 
-1. **summary**: 한 줄 요약. 데이터에 기반한 팩트 중심으로 작성. (예: "편지 수는 감소했으나, 포트폴리오 구성과 종목 관련 질문이 중심인 주간입니다.")
+1. **summary**: 한 줄 요약. **반드시 편지/게시글 증감 추이로 시작**한 뒤, 이번 주 핵심 키워드를 언급. (예: "전주 대비 편지·게시글 모두 감소했으나, 이란 전쟁 속에서도 마스터의 헌신에 대한 감사와 건강 염려가 두드러진 주간입니다." 또는 "편지 수가 전주 대비 60% 감소했으나, 포트폴리오 성과를 둘러싼 논의가 집중된 주간입니다.")
 
 2. **main_content**: 주요 내용을 테마별로 정리 ({('2개 테마' if compact else '2-4개 테마')})
    - 대응 필요 건(서비스 피드백)은 여기에 넣지 말 것. service_feedback에서 별도로 다룸.
    - 비슷한 내용끼리 묶어서 테마로 구성
-   - 각 테마마다 2-3문장으로 충분히 설명하고, 맥락과 배경을 포함할 것
-   - 대표 인용문은 가장 핵심적인 원문을 그대로 사용 (긴 인용 OK)
-   - 데이터에 나온 내용을 충실히 반영하되, 다양한 주제를 빠짐없이 커버할 것
-   - 테마 제목은 구체적으로 (예: "이란-미국 전쟁과 예측 신뢰성 논쟁", "커뮤니티 내 갈등 심화")
+   - 각 테마마다 **3-5문장**으로 설명. 구체적 종목명·수치·사건명을 반드시 포함.
+   - 본문은 간접 서술로 작성하되, 각 테마 끝에 **대표 원문 인용 1개**를 > 블록으로 첨부.
+   - 인용문은 원문에서 가장 대표적이고 맥락이 잘 드러나는 것을 선택. 원문 그대로 사용.
+   - 테마 제목은 구체적으로 (예: "유가 예측 실패에 대한 집중 비판", "포트폴리오 변경 사유 설명 부재에 대한 의견")
    반드시 아래 형식의 문자열로 작성해주세요. 각 테마 사이에 반드시 빈 줄(\\n\\n)을 넣어주세요:
 
-**1. 구체적 테마 제목**\\n\\n테마에 대한 2-3문장 상세 설명. 어떤 맥락에서 이런 반응이 나왔는지, 이용자들의 입장은 어떤지 구체적으로 서술.\\n\\n> _"대표적인 원문 인용 (가능하면 2-3문장 길이)"_\\n\\n\\n**2. 구체적 테마 제목**\\n\\n테마에 대한 2-3문장 상세 설명.\\n\\n> _"대표적인 원문 인용"_
+**1. 구체적 테마 제목**\\n\\n3-5문장 간접 서술. 구체적 종목명, 수치, 사건을 포함.\\n\\n> "대표 원문 인용 (가장 핵심적인 이용자 글 1개, 원문 그대로)"\\n\\n\\n**2. 구체적 테마 제목**\\n\\n3-5문장 간접 서술.\\n\\n> "대표 원문 인용"
 
 
 3. **service_feedback**: 서비스 피드백 (하나의 문자열로 작성)
    - 대응 필요 건이 없으면 "- 서비스 관련 피드백 없음"으로 작성
    - "서비스 피드백이 접수되었습니다" 같은 일반적 문구 금지
-   - 구체적으로 어떤 피드백이 몇 건인지, 내용을 명시할 것
-   - 대표 인용문 1개 첨부
-   - 형식 예시: "오프라인 수업 일정 사전 공지 부재에 대한 불만이 복수 제기됐습니다. 녹화본 재생 중단 현상, 수업 자료(PPT) 제공 요청도 함께 접수됐습니다. (총 N건)\\n\\n> _\\"인용문\\"_"
+   - 구체적으로 어떤 피드백이 있는지, 내용을 명시할 것
+   - 대표 원문 인용 **2개**를 각각 > 블록으로 첨부
+   - 형식 예시: "런치브리핑 업로드 지연에 대한 부정적인 내용이 3건 있었습니다.\\n\\n> \\"가장 중요할때 런치브리핑이 없다니\\"\\n\\n> \\"라이브하는데 채팅창은 왜 닫아둠?\\"\\n"
 
 ## 응답 형식
 반드시 JSON 객체로 응답하되, 모든 값은 문자열(string)이어야 합니다. 리스트나 배열을 사용하지 마세요.
@@ -466,29 +447,77 @@ class ReportGenerator:
         try:
             response_text = self._call_llm(prompt, max_tokens=3000)
 
-            # JSON 파싱
-            # JSON 블록 추출
-            json_match = re.search(r'\{[\s\S]*\}', response_text)
+            # JSON 파싱 (작은따옴표, 줄바꿈, 코드펜스 등 다양한 형태 처리)
+            cleaned = response_text.strip()
+            if "```" in cleaned:
+                parts = cleaned.split("```")
+                for part in parts[1:]:
+                    p = part.lstrip("json").strip()
+                    if p.startswith("{"):
+                        cleaned = p
+                        break
+
+            json_match = re.search(r'\{[\s\S]*\}', cleaned)
             if json_match:
                 json_str = json_match.group()
+                result = None
+                # 시도 1: 그대로
                 try:
                     result = json.loads(json_str)
                 except json.JSONDecodeError:
-                    # 이스케이프 안 된 줄바꿈/따옴표 정리 후 재시도
-                    json_str = json_str.replace('\n', '\\n').replace('\r', '\\r')
-                    # 이중 이스케이프 방지
-                    json_str = json_str.replace('\\\\n', '\\n').replace('\\\\r', '\\r')
-                    result = json.loads(json_str)
+                    pass
+                # 시도 2: 작은따옴표 → 큰따옴표
+                if result is None:
+                    try:
+                        fixed = json_str.replace("'", '"')
+                        result = json.loads(fixed)
+                    except json.JSONDecodeError:
+                        pass
+                # 시도 3: 줄바꿈 이스케이프
+                if result is None:
+                    try:
+                        fixed = json_str.replace('\n', '\\n').replace('\r', '\\r')
+                        fixed = fixed.replace('\\\\n', '\\n').replace('\\\\r', '\\r')
+                        result = json.loads(fixed)
+                    except json.JSONDecodeError:
+                        pass
+                # 시도 4: 필드별 추출 — 다음 키를 경계로 사용
+                if result is None:
+                    def _extract_between(text, key, next_keys):
+                        pat = rf'["\']?{key}["\']?\s*:\s*["\']'
+                        m = re.search(pat, text)
+                        if not m:
+                            return None
+                        start = m.end()
+                        end = len(text)
+                        for nk in next_keys:
+                            nm = re.search(rf'["\']?\s*,?\s*["\']?{nk}["\']?\s*:', text[start:])
+                            if nm:
+                                end = min(end, start + nm.start())
+                        value = text[start:end].strip()
+                        # JSON 잔여물 제거
+                        value = re.sub(r'[\s"\']*[,\}\]]+\s*$', '', value)
+                        value = value.strip().rstrip('",\'').strip()
+                        return value
+
+                    result = {
+                        "summary": _extract_between(json_str, "summary", ["main_content", "service_feedback"]) or "분석 결과 없음",
+                        "main_content": _extract_between(json_str, "main_content", ["service_feedback"]) or "- 분석 결과 없음",
+                        "service_feedback": _extract_between(json_str, "service_feedback", []) or "- 서비스 피드백 없음",
+                    }
 
                 def _to_markdown(value):
                     """리스트/딕셔너리를 마크다운 문자열로 변환"""
                     if isinstance(value, str):
+                        value = value.replace('\\n', '\n').replace('\\r', '')
+                        value = value.replace('\\"', '"').replace("\\'", "'")
+                        # 줄 끝 백슬래시 제거
+                        value = re.sub(r'\\\s*$', '', value, flags=re.MULTILINE)
                         return value
                     if isinstance(value, list):
                         parts = []
                         for item in value:
                             if isinstance(item, dict):
-                                # {'title': ..., 'summary': ..., 'quote': ...} 형태
                                 title = item.get('title', '')
                                 summary = item.get('summary', '')
                                 quote = item.get('quote', '')
@@ -499,7 +528,6 @@ class ReportGenerator:
                     return str(value)
 
                 main_content = _to_markdown(result.get("main_content", "- 분석 결과 없음"))
-                # 번호 항목(**N.) 사이에 빈 줄이 확실히 들어가도록 후처리
                 main_content = re.sub(r'\n(\*\*\d+\.)', r'\n\n\1', main_content)
 
                 return {
@@ -570,7 +598,7 @@ class ReportGenerator:
         for c in contents:
             topic = c.get("topic", "")
             text = c.get("content", "")
-            if topic == "대응 필요" and text:
+            if topic in ("피드백", "대응 필요") and text:
                 feedback_items.append(text)
 
         if feedback_items:

@@ -60,7 +60,7 @@ class WeeklyAnalytics:
         # 카테고리별 통계 (topic 기반)
         category_stats = self._calculate_category_stats(letters, posts)
 
-        # 서비스 피드백 추출 (topic == "대응 필요")
+        # 서비스 피드백 추출 (topic == "피드백" 또는 legacy "대응 필요")
         service_feedbacks = self._extract_service_feedbacks(letters, posts)
 
         # 태그 분포
@@ -214,7 +214,7 @@ class WeeklyAnalytics:
             summary = letter.get("summary", "")
             master_stats[master_group]["contents"].append({
                 "type": "letter",
-                "content": clean_text(letter.get("message", ""), 150),
+                "content": clean_text(letter.get("message", ""), 300),
                 "topic": topic,
                 "sentiment": sentiment,
                 "summary": summary,
@@ -250,7 +250,7 @@ class WeeklyAnalytics:
             summary = post.get("summary", "")
             master_stats[master_group]["contents"].append({
                 "type": "post",
-                "content": clean_text(content, 150),
+                "content": clean_text(content, 300),
                 "topic": topic,
                 "sentiment": sentiment,
                 "summary": summary,
@@ -358,16 +358,17 @@ class WeeklyAnalytics:
         posts: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """
-        서비스 관련 피드백 추출 (topic == "대응 필요")
+        서비스 관련 피드백 추출 (topic == "피드백" 또는 legacy "대응 필요")
 
         Returns:
-            [{"content": str, "reason": str, "masterId": str}, ...]
+            [{"content": str, "reason": str, "masterId": str, "subtag": str}, ...]
         """
+        feedback_topics = {"피드백", "대응 필요"}  # v5 + v4 호환
         feedbacks = []
 
         for letter in letters:
             topic = letter.get("topic", "")
-            if topic == "대응 필요":
+            if topic in feedback_topics:
                 feedbacks.append({
                     "type": "letter",
                     "content": clean_text(letter.get("message", ""), 200),
@@ -375,12 +376,13 @@ class WeeklyAnalytics:
                     "masterId": letter.get("masterId", "") or letter.get("master_id", "unknown"),
                     "createdAt": letter.get("createdAt", letter.get("created_at", "")),
                     "sentiment": letter.get("sentiment", ""),
+                    "subtag": letter.get("subtag", ""),
                     "tags": letter.get("tags", []),
                 })
 
         for post in posts:
             topic = post.get("topic", "")
-            if topic == "대응 필요":
+            if topic in feedback_topics:
                 content = post.get("textBody") or post.get("body", "")
                 feedbacks.append({
                     "type": "post",
@@ -390,6 +392,7 @@ class WeeklyAnalytics:
                     "masterId": post.get("postBoardId", "") or post.get("masterId", "") or post.get("master_id", "unknown"),
                     "createdAt": post.get("createdAt", post.get("created_at", "")),
                     "sentiment": post.get("sentiment", ""),
+                    "subtag": post.get("subtag", ""),
                     "tags": post.get("tags", []),
                 })
 

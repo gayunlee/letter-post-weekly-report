@@ -25,7 +25,7 @@ load_dotenv()
 from src.bigquery.client import BigQueryClient
 from src.bigquery.queries import WeeklyDataQuery
 from src.bigquery.writer import BigQueryWriter
-from src.classifier_v4.bedrock_classifier import BedrockClassifier
+from src.classifier_v5.bedrock_classifier import BedrockV5Classifier
 
 logging.basicConfig(
     level=logging.INFO,
@@ -151,8 +151,8 @@ def main():
         logger.info(f"  [DRY RUN] 편지 {len(letters)}건, 게시글 {len(posts)}건으로 제한")
 
     # ── Phase 2: 편지글/게시글 분류 (Bedrock Sonnet) ──
-    logger.info("Phase 2: 편지글/게시글 분류 (Bedrock Sonnet)")
-    classifier = BedrockClassifier(max_workers=args.workers)
+    logger.info("Phase 2: 편지글/게시글 분류 (Bedrock Sonnet v5 4분류)")
+    classifier = BedrockV5Classifier(max_workers=args.workers)
 
     all_items = []
     if letters:
