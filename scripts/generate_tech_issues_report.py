@@ -28,10 +28,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 logger = logging.getLogger(__name__)
 
 # ── 설정 ──
-START_DATE = "2026-01-01"
-END_DATE = "2026-02-01"  # exclusive — 1월만 먼저
+START_DATE = "2026-02-01"
+END_DATE = "2026-04-01"  # exclusive — 2~3월
 OUTPUT_DIR = "./exports"
-OUTPUT_FILE = "tech_issues_2026_01.xlsx"
+OUTPUT_FILE = "tech_issues_2026_02_03.xlsx"
 
 # 기술이슈 세분류 프롬프트
 TECH_ISSUE_SYSTEM_PROMPT = """당신은 금융 교육 플랫폼의 기술 이슈 분류기입니다.
@@ -137,7 +137,7 @@ def fetch_all_data(start_date, end_date):
 # ── Step 2: v5 분류 ──
 def classify_all(letters, posts):
     """v5 Bedrock Haiku로 전체 분류"""
-    classifier = BedrockV5Classifier(max_workers=10)
+    classifier = BedrockV5Classifier(max_workers=30)
 
     all_items = []
 
@@ -183,7 +183,7 @@ def classify_all(letters, posts):
 
 def classify_all_batch(letters, posts):
     """v5 Bedrock Haiku 병렬 분류 (ThreadPoolExecutor)"""
-    classifier = BedrockV5Classifier(max_workers=10)
+    classifier = BedrockV5Classifier(max_workers=30)
 
     # 통합 리스트 구성
     raw_items = []
@@ -206,11 +206,11 @@ def classify_all_batch(letters, posts):
             'createdAt': str(item.get('createdAt', ''))[:10],
         })
 
-    logger.info(f"전체 {len(raw_items)}건 병렬 분류 시작 (workers=10)...")
+    logger.info(f"전체 {len(raw_items)}건 병렬 분류 시작 (workers=30)...")
     start_time = time.time()
     done = 0
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=30) as executor:
         future_map = {}
         for i, item in enumerate(raw_items):
             future = executor.submit(classifier.classify_single, item['text'])
@@ -290,7 +290,7 @@ def classify_tech_issues(feedback_items):
     start_time = time.time()
     done = 0
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=30) as executor:
         future_map = {}
         for i, item in enumerate(tech_items):
             future = executor.submit(classify_single, item)
@@ -610,65 +610,77 @@ def send_to_slack(output_path, feedback_count, tech_count, clusters_summary):
         logger.error(f"파일 업로드 실패: {result}")
 
 
-def main():
-    print("=" * 60)
-    print("Q1 2026 기술 이슈 세분류 리포트 생성")
-    print("=" * 60)
+def classify_month(month_start, month_end):
+    """단일 월 분류 — 캐시 있으면 건너뜀"""
+    cache_path = os.path.join(OUTPUT_DIR, f"classified_{month_start}.json")
 
-    output_path = os.path.join(OUTPUT_DIR, OUTPUT_FILE)
-    cache_path = os.path.join(OUTPUT_DIR, "q1_2026_classified_all.json")
-
-    # 캐시 확인
     if os.path.exists(cache_path):
-        logger.info(f"캐시 로드: {cache_path}")
+        logger.info(f"캐시 존재: {cache_path}")
         with open(cache_path) as f:
-            all_items = json.load(f)
-        logger.info(f"캐시에서 {len(all_items)}건 로드")
-    else:
-        # Step 1: BigQuery 조회
-        letters, posts = fetch_all_data(START_DATE, END_DATE)
+            items = json.load(f)
+        logger.info(f"  {len(items)}건 로드")
+        return items
 
-        # Step 2: v5 분류
-        all_items, cost = classify_all_batch(letters, posts)
+    # BigQuery 조회
+    letters, posts = fetch_all_data(month_start, month_end)
 
-        # 캐시 저장
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-        with open(cache_path, 'w') as f:
-            json.dump(all_items, f, ensure_ascii=False, indent=2)
-        logger.info(f"캐시 저장: {cache_path} ({len(all_items)}건)")
+    if not letters and not posts:
+        logger.info(f"  데이터 없음")
+        return []
 
-    # Step 3: 피드백 기술이슈 세분류
-    feedback_items = [i for i in all_items if i.get('topic') == '피드백']
-    logger.info(f"피드백 {len(feedback_items)}건 중 기술이슈 세분류...")
+    # v5 분류
+    items, cost = classify_all_batch(letters, posts)
 
-    tech_items = classify_tech_issues(feedback_items)
+    # 캐시 저장
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    with open(cache_path, 'w') as f:
+        json.dump(items, f, ensure_ascii=False, indent=2)
+    logger.info(f"캐시 저장: {cache_path} ({len(items)}건, ${cost['cost_usd']})")
 
-    # Step 4: 엑셀 생성
-    feedback_count, tech_count = generate_excel(all_items, tech_items, output_path)
+    return items
 
-    # 클러스터 요약
-    type_counts = Counter()
-    for item in tech_items:
-        detail = item.get('tech_detail', {})
-        t = detail.get('issue_type') or detail.get('request_type') or '미분류'
-        type_counts[t] += 1
-    clusters_summary = type_counts.most_common()
+
+def main():
+    """월별로 나눠서 분류 + 캐시 저장"""
+    print("=" * 60)
+    print("월별 v5 분류 파이프라인")
+    print("=" * 60)
+
+    # 월별 구간
+    months = [
+        ("2026-02-01", "2026-03-01"),
+        ("2026-03-01", "2026-04-01"),
+    ]
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    all_items = []
+
+    for start, end in months:
+        print(f"\n{'='*40}")
+        print(f"  {start} ~ {end}")
+        print(f"{'='*40}")
+        items = classify_month(start, end)
+        all_items.extend(items)
+
+    # 전체 통합 캐시 저장
+    combined_path = os.path.join(OUTPUT_DIR, "feb_mar_2026_classified_all.json")
+    with open(combined_path, 'w') as f:
+        json.dump(all_items, f, ensure_ascii=False, indent=2)
+
+    # 통계
+    from collections import Counter
+    topics = Counter(i.get('topic') for i in all_items)
+    feedback = [i for i in all_items if i.get('topic') == '피드백']
 
     print(f"\n{'='*60}")
     print(f"완료!")
     print(f"  전체: {len(all_items)}건")
-    print(f"  피드백: {feedback_count}건")
-    print(f"  기술이슈: {tech_count}건")
-    print(f"  엑셀: {output_path}")
+    for t, c in topics.most_common():
+        print(f"    {t}: {c}건")
+    print(f"  피드백: {len(feedback)}건")
+    print(f"  통합 캐시: {combined_path}")
     print(f"{'='*60}")
-
-    # Step 5: 슬랙 전송
-    try:
-        send_to_slack(output_path, feedback_count, tech_count, clusters_summary)
-        print("슬랙 전송 완료!")
-    except Exception as e:
-        logger.error(f"슬랙 전송 실패: {e}")
-        print(f"슬랙 전송 실패 (엑셀은 생성됨): {e}")
+    print(f"\n다음 단계: python3 scripts/cluster_tech_issues.py 로 클러스터링")
 
 
 if __name__ == "__main__":

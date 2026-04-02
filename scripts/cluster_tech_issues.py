@@ -24,35 +24,33 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 logger = logging.getLogger(__name__)
 
 # ── 설정 ──
-DATA_PATH = "data/classified_data/v5_2026-03-23.json"
+DATA_PATH = "exports/feb_mar_2026_classified_all.json"
 OUTPUT_DIR = "./exports"
-OUTPUT_FILE = "tech_issues_clustered_2026-03-23.xlsx"
-DISTANCE_THRESHOLD = 0.60  # 코사인 거리 임계값 (낮을수록 엄격)
+OUTPUT_FILE = "tech_issues_clustered_2026_02_03.xlsx"
+DISTANCE_THRESHOLD = 0.45  # 코사인 거리 임계값 (낮을수록 엄격, 더 세분화)
 
 # ── Step 1: LLM 세부 증상 서술 ──
-DESCRIBE_SYSTEM_PROMPT = """당신은 금융 교육 플랫폼의 VOC 분석가입니다.
-
-아래 사용자 VOC 텍스트를 읽고, **기술/서비스 이슈를 한 문장으로 구체적으로 서술**하세요.
+DESCRIBE_SYSTEM_PROMPT = """이 텍스트에서 사용자가 말하고 있는 내용을 한 문장으로 요약하세요.
 
 규칙:
-- 증상 중심으로 서술 (원인 추측 X)
-- 어떤 기능/화면에서, 어떤 증상이 발생했는지
-- 정보가 부족해도 최선의 추측으로 서술. "구체적 증상 불명"이라고 쓰지 말 것
-  - "안되요" → "앱 특정 기능 작동 불가"
-  - "접속이 안돼요" → "앱/웹 접속 불가"
-  - "라이브특강 안되는 건가요" → "라이브 특강 접속 불가"
-- 기술 이슈든 운영 이슈든 서비스 피드백이든 모두 서술
-- 환불/해지/구독/결제 → "구독 해지 경로 불명확", "환불 요청 후 처리 지연"
-- 운영 정책 → "운영진 대응 지연", "커뮤니티 관리 부재"
-- 기능 요청 → "댓글 기능 부재", "검색 필터 개선 필요"
-- 한 문장, 50자 이내
+- 원문에 보이는 사실만 적을 것
+- **구체적인 서비스명/화면명/상품명/상황을 반드시 포함** (추상적 표현 금지)
+  - X: "접속 불가" → O: "어스캠퍼스 앱에서 나의스터디 탭 진입 시 빈 화면 표시"
+  - X: "결제 오류" → O: "실전매매 마스터클래스 가상계좌 입금 후 미등록 상태 표시"
+  - X: "수강권 문제" → O: "홍매화반 멤버십 보유 중이나 굿모닝담샘 접근 시 수강권 등록 요청 표시"
+- 평가/판단/의견 금지 ("미흡", "부재", "부족" 등)
+- 인과관계 추정 금지 ("~로 인한", "~때문에")
+- "~로 보입니다", "VOC가 아닙니다" 같은 코멘트 금지
+- 100자 이내, 한 문장만 출력
 
 예시:
-- "앱 푸시 알림 설정 ON인데 새 글 알림 미수신"
-- "줌 라이브 강의 입장 버튼 클릭 시 무반응"
-- "구독 해지 버튼 접근 경로 불명확, 해지 방법 안내 부재"
-- "환불 요청 후 7일 경과에도 처리 미완료"
-- "커뮤니티 댓글 기능 없어 사용자 간 소통 불가"
+- "어스플러스 앱 푸시 알림 설정 ON인데 새 글 알림이 오지 않음"
+- "줌 라이브 특강 '참여하기' 버튼 클릭해도 화면 전환 없음"
+- "어스캠퍼스 봄학기 결제 완료했으나 나의스터디에 강의 미표시"
+- "기업분석도감 모바일 열람 시 글씨 확대(핀치줌) 미작동"
+- "아침뉴스 기사 링크 클릭 시 기사 대신 언론사 메인페이지로 이동"
+- "자동결제가 되는 줄 몰랐다는 사용자의 월 구독료 환불 요청"
+- "미과장 커뮤니티 게시판 폐쇄 후 재개설 요청"
 
 응답: 한 문장만 출력 (JSON 아님)"""
 
@@ -421,7 +419,9 @@ def main():
     with open(DATA_PATH) as f:
         data = json.load(f)
 
-    feedback = [i for i in data['items'] if i['topic'] == '피드백']
+    # 리스트 형태 (generate_tech_issues_report) 또는 dict 형태 (v5 classified_data)
+    items = data if isinstance(data, list) else data.get('items', [])
+    feedback = [i for i in items if i.get('topic') == '피드백']
     # 이용문의 제외 — 단순 문의는 클러스터링 대상 아님
     feedback = [i for i in feedback if i.get('subtag') != '이용문의']
     logger.info(f"피드백 {len(feedback)}건 로드 (이용문의 제외)")
