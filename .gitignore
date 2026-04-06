@@ -71,3 +71,5 @@ Thumbs.db
 logs/
 .claude/
 notebooks/
+exports/
+.mcp.json

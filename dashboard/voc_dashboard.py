@@ -71,7 +71,8 @@ role = st.sidebar.radio("직군 선택", ["개발팀", "비개발팀"], index=0)
 # 기간 선택
 periods = {
     "1월": ("01", "exports/q1_2026_classified_all.json"),
-    "2~3월": ("02_03", "exports/feb_mar_2026_classified_all.json"),
+    "2월": ("02", "exports/classified_2026-02-01.json"),
+    "3월": ("03", "exports/classified_2026-03-01.json"),
 }
 selected_period = st.sidebar.selectbox("기간", list(periods.keys()), index=1)
 period_key, classified_path = periods[selected_period]

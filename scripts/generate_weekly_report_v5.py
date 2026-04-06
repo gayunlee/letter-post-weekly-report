@@ -23,6 +23,8 @@ from src.classifier_v5.classifier import V5Classifier
 from src.classifier_v5.bedrock_classifier import BedrockV5Classifier
 from src.reporter.analytics import WeeklyAnalytics
 from src.reporter.report_generator import ReportGenerator
+from src.reporter.feedback_clusterer import cluster_feedbacks, enrich_master_stats_with_clusters
+from src.reporter.tone_reviewer import review_report
 
 
 def classify_items(items, content_field, classifier):
@@ -90,7 +92,7 @@ def main():
 
     # 2. v5 분류
     print(f"\n  Phase 2: v5 4분류 (Bedrock Haiku)")
-    bedrock_workers = min(args.workers, 5)  # Bedrock throttling 방지
+    bedrock_workers = min(args.workers, 30)  # Bedrock Haiku는 30까지 OK
     classifier = BedrockV5Classifier(model_id="us.anthropic.claude-3-5-haiku-20241022-v1:0", max_workers=bedrock_workers)
     start_time = time.time()
 
@@ -100,16 +102,6 @@ def main():
     cost = classifier.get_cost_report()
     elapsed = time.time() - start_time
     print(f"    분류 완료: {cost['total_items']}건, {elapsed:.1f}초, ${cost['cost_usd']}")
-
-    # 기타 재분류
-    all_items_for_reclassify = [
-        {"text": item.get("message", ""), "classification": item.get("classification", {})}
-        for item in letters
-    ] + [
-        {"text": item.get("textBody", ""), "classification": item.get("classification", {})}
-        for item in posts
-    ]
-    _, new_candidates = classifier.reclassify_others(all_items_for_reclassify)
 
     # 3. 전주 데이터 (건수 비교용 — 분류 불필요)
     print(f"\n  Phase 3: 전주 건수 조회")
@@ -122,6 +114,23 @@ def main():
     prev_data = query.get_weekly_data(prev_start, prev_end)
     prev_letters = prev_data["letters"]
     prev_posts = prev_data["posts"]
+
+    # 전주 마스터 매핑 (count 비교용)
+    for item in prev_letters:
+        mid = item.get("masterId", "")
+        if mid in master_info:
+            item["masterName"] = master_info[mid].get("displayName") or master_info[mid].get("name", "Unknown")
+        else:
+            item["masterName"] = "Unknown"
+    board_query_sql = f"SELECT _id as boardId, masterId FROM `{bq_client.project_id}.us_plus_new.postboards`"
+    board_to_master = {b["boardId"]: b["masterId"] for b in bq_client.execute_query(board_query_sql)}
+    for item in prev_posts:
+        bid = item.get("postBoardId", "")
+        mid = board_to_master.get(bid, bid)
+        if mid in master_info:
+            item["masterName"] = master_info[mid].get("displayName") or master_info[mid].get("name", "Unknown")
+        else:
+            item["masterName"] = "Unknown"
 
     if prev_letters or prev_posts:
         print(f"    전주: 편지 {len(prev_letters)}건, 게시글 {len(prev_posts)}건 (건수만 사용)")
@@ -150,6 +159,18 @@ def main():
     feedbacks = stats.get("service_feedbacks", [])
     print(f"    피드백: {len(feedbacks)}건")
 
+    # 4-1. 피드백 클러스터링
+    print(f"\n  Phase 4-1: 피드백 클러스터링")
+    if feedbacks:
+        enriched, cluster_info = cluster_feedbacks(feedbacks)
+        stats["service_feedbacks"] = enriched
+        stats["feedback_clusters"] = cluster_info
+        enrich_master_stats_with_clusters(stats)
+        multi = [c for c in cluster_info.values() if c["size"] >= 2]
+        print(f"    {len(cluster_info)}개 클러스터 (2건+: {len(multi)}개)")
+    else:
+        print(f"    피드백 없음")
+
     # 5. 리포트 생성
     print(f"\n  Phase 5: 리포트 생성")
     output_dir = os.getenv("REPORT_OUTPUT_DIR", "./reports")
@@ -158,6 +179,15 @@ def main():
 
     generator = ReportGenerator()
     report = generator.generate_report(stats, start_date, end_date, output_path=output_path)
+
+    # 5-1. 톤 검수
+    print(f"\n  Phase 5-1: 톤 검수")
+    fixed_report, review_stats = review_report(report)
+    print(f"    {review_stats['fixed_sections']}/{review_stats['total_sections']} 섹션 수정, {review_stats['total_issues']}건 교정")
+    if review_stats["total_issues"] > 0:
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(fixed_report)
+        report = fixed_report
 
     total_cost = classifier.get_cost_report()
     print(f"\n  저장: {output_path}")

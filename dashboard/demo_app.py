@@ -20,25 +20,72 @@ DATA_DIR = Path("data")
 TWO_AXIS_DIR = DATA_DIR / "classified_data_two_axis"
 CHANNEL_DIR = DATA_DIR / "channel_io" / "golden"
 
+# BigQuery 설정
+import os
+os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", str(Path(__file__).parent.parent / "accountKey.json"))
+BQ_PROJECT = "us-service-data"
+BQ_DATASET = "voc_labelled"
+
 
 # ── 데이터 로드 ──────────────────────────────────────────────────────
 
-@st.cache_data
+@st.cache_data(ttl=600)
 def load_two_axis_data():
-    items = []
-    for f in sorted(TWO_AXIS_DIR.glob("*.json")):
-        with open(f, encoding="utf-8") as fh:
-            data = json.load(fh)
-        week = f.stem
-        for item in data.get("letters", []):
-            item["_type"] = "편지"
-            item["_week"] = week
+    """BigQuery voc_labelled에서 분류 데이터 로드"""
+    try:
+        from google.cloud import bigquery
+        client = bigquery.Client(project=BQ_PROJECT)
+        query = f"""
+        SELECT
+            id, source_type, master_name, user_id, content,
+            created_at, topic, sentiment, summary, tags,
+            confidence, pipeline_date
+        FROM `{BQ_PROJECT}.{BQ_DATASET}.letters_posts`
+        ORDER BY pipeline_date DESC, created_at DESC
+        LIMIT 10000
+        """
+        df = client.query(query).to_dataframe()
+        items = []
+        for _, row in df.iterrows():
+            item = {
+                "_id": row.get("id", ""),
+                "_type": "편지" if row.get("source_type") == "letter" else "게시글",
+                "_week": str(row.get("pipeline_date", ""))[:10],
+                "masterName": row.get("master_name", ""),
+                "message": row.get("content", ""),
+                "textBody": row.get("content", ""),
+                "body": row.get("content", ""),
+                "createdAt": str(row.get("created_at", "")),
+                "classification": {
+                    "topic": row.get("topic", ""),
+                    "sentiment": row.get("sentiment", ""),
+                },
+                "detail_tags": {
+                    "category_tags": list(row.get("tags", [])) if row.get("tags") is not None else [],
+                    "free_tags": list(row.get("tags", [])) if row.get("tags") is not None else [],
+                    "summary": row.get("summary", ""),
+                },
+            }
             items.append(item)
-        for item in data.get("posts", []):
-            item["_type"] = "게시글"
-            item["_week"] = week
-            items.append(item)
-    return items
+        st.sidebar.success(f"BigQuery: {len(items)}건 로드")
+        return items
+    except Exception as e:
+        st.sidebar.warning(f"BigQuery 실패: {e}\n로컬 파일 사용")
+        # fallback: 로컬 파일
+        items = []
+        for f in sorted(TWO_AXIS_DIR.glob("*.json")):
+            with open(f, encoding="utf-8") as fh:
+                data = json.load(fh)
+            week = f.stem
+            for item in data.get("letters", []):
+                item["_type"] = "편지"
+                item["_week"] = week
+                items.append(item)
+            for item in data.get("posts", []):
+                item["_type"] = "게시글"
+                item["_week"] = week
+                items.append(item)
+        return items
 
 
 @st.cache_data
@@ -585,10 +632,22 @@ with tabs[0]:
     prev_total = insights.get("prev_total", 0) if insights else 0
     wow_pct = f"{wow_delta:+,}건 ({round(wow_delta/prev_total*100,1):+.1f}%)" if prev_total else ""
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("분석 건수 (이번 주)", f"{len(df)+len(df_channel):,}건", wow_pct)
+    col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+    col1.metric("분석 건수", f"{len(df)+len(df_channel):,}건", wow_pct)
     col2.metric("리포트 생성", "< 2분", "기존 수동 8시간 → 98% 단축")
     col3.metric("데이터 소스", "2개 채널", "편지·게시글 + 채널톡 CS")
+    with col4:
+        if not df.empty:
+            try:
+                from io import BytesIO
+                buf = BytesIO()
+                df.drop(columns=["category_tags", "free_tags"], errors="ignore").to_excel(buf, index=False, engine="openpyxl")
+                st.download_button("📥 엑셀", buf.getvalue(),
+                                   file_name=f"voc_전체_{df['주차'].iloc[0] if not df.empty else 'data'}.xlsx",
+                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                   use_container_width=True)
+            except Exception:
+                pass
 
     st.markdown("---")
     st.subheader("📌 이번 주 3가지 신호")
@@ -1081,8 +1140,21 @@ with tabs[4]:
         display = filtered[["유형", "마스터", "주제", "감성", "summary", "내용"]].copy()
         display["내용"] = display["내용"].str[:200]
         st.dataframe(display, use_container_width=True, hide_index=True, height=450)
-        csv = filtered.drop(columns=["category_tags", "free_tags"]).to_csv(index=False).encode("utf-8-sig")
-        st.download_button("📥 CSV 다운로드", csv, file_name="voc_filtered.csv", mime="text/csv")
+        col_dl1, col_dl2 = st.columns(2)
+        with col_dl1:
+            csv = filtered.drop(columns=["category_tags", "free_tags"]).to_csv(index=False).encode("utf-8-sig")
+            st.download_button("📥 CSV 다운로드", csv, file_name="voc_filtered.csv", mime="text/csv")
+        with col_dl2:
+            try:
+                from io import BytesIO
+                buf = BytesIO()
+                export_df = filtered.drop(columns=["category_tags", "free_tags"]).copy()
+                export_df.to_excel(buf, index=False, engine="openpyxl")
+                st.download_button("📥 엑셀 다운로드", buf.getvalue(),
+                                   file_name="voc_filtered.xlsx",
+                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            except Exception:
+                st.caption("엑셀 다운로드는 openpyxl 필요")
 
 
 # ══════════════════════════════════════════════════════════════════════

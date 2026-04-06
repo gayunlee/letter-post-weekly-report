@@ -1,0 +1,15 @@
+.git
+.env
+accountKey.json
+chroma_db/
+data/
+reports/
+benchmarks/
+notebooks/
+models/channel_4class/
+models/channel_3class/kcelectra-base-v2022-v*/checkpoint*
+models/v3/
+__pycache__
+*.pyc
+.claude/
+openspec/

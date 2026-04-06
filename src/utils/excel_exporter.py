@@ -24,11 +24,13 @@ def export_to_excel(
     # 편지글 데이터 변환
     letter_rows = []
     for letter in letters:
+        cls = letter.get("classification", {})
         letter_rows.append({
             "마스터": letter.get("masterName", "Unknown"),
             "클럽": letter.get("masterClubName", ""),
             "내용": letter.get("message", ""),
-            "라벨": letter.get("classification", {}).get("category", "미분류"),
+            "라벨": cls.get("category", "") or letter.get("topic", "미분류"),
+            "세부분류": cls.get("subtag", "") or letter.get("subtag", ""),
             "날짜": _format_date(letter.get("createdAt", "")),
             "차단": "Y" if letter.get("isBlock") == "true" else "N"
         })
@@ -37,12 +39,14 @@ def export_to_excel(
     post_rows = []
     for post in posts:
         content = post.get("textBody") or post.get("body", "")
+        cls = post.get("classification", {})
         post_rows.append({
             "마스터": post.get("masterName", "Unknown"),
             "클럽": post.get("masterClubName", ""),
             "제목": post.get("title", ""),
             "내용": content,
-            "라벨": post.get("classification", {}).get("category", "미분류"),
+            "라벨": cls.get("category", "") or post.get("topic", "미분류"),
+            "세부분류": cls.get("subtag", "") or post.get("subtag", ""),
             "날짜": _format_date(post.get("createdAt", "")),
             "차단": "Y" if post.get("isBlock") == "true" else "N"
         })
@@ -73,8 +77,9 @@ def _set_column_widths(worksheet, df: pd.DataFrame):
         '마스터': 15,
         '클럽': 20,
         '제목': 40,
-        '내용': 80,  # 내용 열은 넓게
+        '내용': 80,
         '라벨': 15,
+        '세부분류': 15,
         '날짜': 18,
         '차단': 8
     }
