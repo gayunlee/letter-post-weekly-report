@@ -13,13 +13,9 @@ SA_EMAIL="voc-pipeline-sa@${PROJECT_ID}.iam.gserviceaccount.com"
 
 gcloud config set project "${PROJECT_ID}"
 
-# 1. 대시보드 이미지 빌드 (별도 Dockerfile 사용)
+# 1. 대시보드 이미지 빌드 (별도 cloudbuild config — Dockerfile 경로가 dashboard/)
 echo ">> 대시보드 이미지 빌드"
-gcloud builds submit \
-    --tag="${IMAGE}" \
-    --machine-type=E2_HIGHCPU_8 \
-    --file=dashboard/Dockerfile \
-    .
+gcloud builds submit --config=dashboard/cloudbuild.yaml .
 
 # 2. Cloud Run Service 배포
 echo ">> Cloud Run Service 배포"

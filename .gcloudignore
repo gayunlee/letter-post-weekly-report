@@ -1,0 +1,48 @@
+# Cloud Build 업로드 시 제외할 파일 (.gitignore 와 별개로 평가)
+# 운영 컨테이너에 필요한 모델 파일은 포함시킨다 (gitignore 의 models/ 무시).
+
+.git
+.env
+.env.example
+accountKey.json
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+venv/
+env/
+.eggs/
+*.egg-info/
+
+# Local data — 컨테이너 불필요
+chroma_db/
+chroma_db_backup_*/
+chroma_db_two_axis/
+data/
+reports/
+exports/
+benchmarks/
+notebooks/
+logs/
+
+# 대용량 학습 산출물 (모델 체크포인트만 제외, final_model 은 포함)
+models/channel_4class/
+models/channel_3class/kcelectra-base-v2022/
+models/channel_3class/kcelectra-base-v2022-v6/
+models/channel_3class/kcelectra-base-v2022-v7-10k/
+models/channel_3class/kcelectra-base-v2022-v8-3500/
+models/kcbert_voc_classifier/
+models/mlx/
+models/two_axis/
+models/v3/
+models/v4/
+
+# 개발 도구/메모
+.claude/
+.mcp.json
+openspec/
+cs-agent-demo/
+# dashboard/ 는 별도 이미지 빌드용으로 포함 (Dockerfile 이 src/ 만 COPY 하므로 영향 없음)

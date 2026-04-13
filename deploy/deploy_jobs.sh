@@ -13,8 +13,7 @@ SA_EMAIL="voc-pipeline-sa@${PROJECT_ID}.iam.gserviceaccount.com"
 gcloud config set project "${PROJECT_ID}"
 
 # 공통 시크릿 바인딩 (env var = secret 이름)
-SECRETS="ANTHROPIC_API_KEY=anthropic-api-key:latest,\
-AWS_ACCESS_KEY_ID=aws-access-key-id:latest,\
+SECRETS="AWS_ACCESS_KEY_ID=aws-access-key-id:latest,\
 AWS_SECRET_ACCESS_KEY=aws-secret-access-key:latest,\
 AWS_REGION=aws-region:latest,\
 NOTION_API_KEY=notion-api-key:latest,\

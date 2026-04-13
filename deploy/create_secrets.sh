@@ -16,20 +16,20 @@ fi
 
 gcloud config set project "${PROJECT_ID}"
 
-# Secret Manager 시크릿 이름  ← .env 키 매핑
-declare -A MAP=(
-  ["anthropic-api-key"]="ANTHROPIC_API_KEY"
-  ["aws-access-key-id"]="AWS_ACCESS_KEY_ID"
-  ["aws-secret-access-key"]="AWS_SECRET_ACCESS_KEY"
-  ["aws-region"]="AWS_REGION"
-  ["notion-api-key"]="NOTION_API_KEY"
-  ["notion-database-id"]="NOTION_DATABASE_ID"
-  ["slack-bot-token"]="SLACK_BOT_TOKEN"
-  ["slack-channel-id"]="SLACK_CHANNEL_ID"
+# Secret Manager 이름:env 키 매핑 (macOS bash 3.2 호환 — 연관배열 미사용)
+MAPPINGS=(
+  "aws-access-key-id:AWS_ACCESS_KEY_ID"
+  "aws-secret-access-key:AWS_SECRET_ACCESS_KEY"
+  "aws-region:AWS_REGION"
+  "notion-api-key:NOTION_API_KEY"
+  "notion-database-id:NOTION_DATABASE_ID"
+  "slack-bot-token:SLACK_BOT_TOKEN"
+  "slack-channel-id:SLACK_CHANNEL_ID"
 )
 
-for secret_name in "${!MAP[@]}"; do
-  env_key="${MAP[${secret_name}]}"
+for entry in "${MAPPINGS[@]}"; do
+  secret_name="${entry%%:*}"
+  env_key="${entry##*:}"
   value="$(grep -E "^${env_key}=" "${ENV_FILE}" | head -1 | sed -E "s/^${env_key}=//; s/^['\"]//; s/['\"]$//")"
   if [[ -z "${value}" ]]; then
     echo "⚠️  ${env_key} 값이 비어있음 — 건너뜀"
@@ -41,5 +41,5 @@ done
 
 echo
 echo "완료. 현재 시크릿 목록:"
-gcloud secrets list --filter="name ~ (anthropic|aws-|notion-|slack-)" \
+gcloud secrets list --filter="name ~ (aws-|notion-|slack-)" \
     --format="table(name.basename(),createTime)"

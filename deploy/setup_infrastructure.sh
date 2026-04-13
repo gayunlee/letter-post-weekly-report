@@ -64,9 +64,9 @@ for role in \
 done
 
 # 5. Secret Manager 시크릿 껍데기 (값은 deploy/create_secrets.sh 참고)
+# 운영은 Bedrock(AWS)만 사용 — ANTHROPIC_API_KEY 불필요
 echo ">> Secret Manager 껍데기 생성"
 for secret in \
-    anthropic-api-key \
     aws-access-key-id \
     aws-secret-access-key \
     aws-region \
