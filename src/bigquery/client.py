@@ -13,16 +13,27 @@ class BigQueryClient:
         BigQuery 클라이언트 초기화
 
         Args:
-            credentials_path: 서비스 계정 키 파일 경로
+            credentials_path: 서비스 계정 키 파일 경로 (로컬 개발 환경 전용)
+
+        우선순위:
+        1. credentials_path 파일이 있으면 그걸 사용 (로컬 개발)
+        2. 없으면 Application Default Credentials 사용 (Cloud Run 서비스 계정)
         """
-        self.credentials = service_account.Credentials.from_service_account_file(
-            credentials_path
-        )
-        self.client = bigquery.Client(
-            credentials=self.credentials,
-            project=self.credentials.project_id
-        )
-        self.project_id = self.credentials.project_id
+        if os.path.exists(credentials_path):
+            self.credentials = service_account.Credentials.from_service_account_file(
+                credentials_path
+            )
+            self.client = bigquery.Client(
+                credentials=self.credentials,
+                project=self.credentials.project_id,
+            )
+            self.project_id = self.credentials.project_id
+        else:
+            # Cloud Run 등 매니지드 환경: 서비스 계정 자격 자동 획득
+            project_id = os.getenv("BIGQUERY_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT")
+            self.client = bigquery.Client(project=project_id)
+            self.credentials = None
+            self.project_id = self.client.project
 
     def list_datasets(self) -> List[str]:
         """
