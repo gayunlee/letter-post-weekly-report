@@ -140,9 +140,24 @@ gcloud secrets versions access latest --secret=aws-region
 ### Scheduler 가 Job 을 호출 못함
 IAM 정책 확인 — 서비스 계정에 `roles/run.invoker` 필요 (`deploy_jobs.sh` 마지막 단계에서 자동 부여).
 
+## 대시보드 (별도 서비스)
+
+VOC 대시보드는 `dashboard/voc_dashboard.py` (Streamlit) — Cloud Run **Service** 로 배포 (Jobs 와 별도).
+
+```bash
+bash deploy/deploy_dashboard.sh
+```
+
+- BigQuery `voc_labelled` 직접 조회 (10분 캐시)
+- 사이드바에서 기간 선택 (최근 7/14/30일 / 커스텀)
+- 메모리 1Gi, max 3 인스턴스, 미사용 시 0 으로 스케일다운
+- 초기 배포는 `--allow-unauthenticated` (URL 만 알면 접속) — 운영 전 IAP 적용 권장
+- 클러스터링 뷰(개발팀)는 로컬 `exports/` 파일 의존 → Cloud Run 환경에서는 자동 비활성
+
 ## 다음 단계 (TODO)
 
 - [ ] 채널톡 KcELECTRA 활성화 (메모리 증설 + `--skip-channel` 제거)
 - [ ] 일간 파이프라인 완료 시 Slack 모니터링 메시지 (대시보드 URL + 부정 이슈 요약)
 - [ ] 일간 파이프라인 실패 시 Slack 알림 (sanity check fail 시 주간이 막히므로)
-- [ ] 대시보드 Cloud Run 배포 (별도 서비스 — BigQuery 직접 연결)
+- [ ] 대시보드 IAP 적용 (회사 Google Workspace 계정 인증)
+- [ ] 클러스터링 결과를 BigQuery 로 이관 (대시보드 개발팀 뷰 복원)

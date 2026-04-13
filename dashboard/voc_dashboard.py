@@ -1,10 +1,14 @@
 """VOC 대시보드 — 개발팀 / 비개발팀 뷰
 
-실행: streamlit run dashboard/voc_dashboard.py
+로컬: streamlit run dashboard/voc_dashboard.py
+Cloud Run: 컨테이너에서 `streamlit run dashboard/voc_dashboard.py --server.port=8080`
+
+데이터 소스: BigQuery voc_labelled.letters_posts (일간 파이프라인 적재)
 """
 import json
+import os
+from datetime import date, timedelta, datetime
 from pathlib import Path
-from collections import Counter, defaultdict
 
 import streamlit as st
 import pandas as pd
@@ -13,26 +17,51 @@ import plotly.express as px
 st.set_page_config(page_title="VOC 대시보드", layout="wide", initial_sidebar_state="expanded")
 
 EXPORTS_DIR = Path("exports")
+PROJECT_ID = os.getenv("BIGQUERY_PROJECT_ID", "us-service-data")
 
 
 # ══════════════════════════════════════
 # 데이터 로드
 # ══════════════════════════════════════
 
-@st.cache_data
-def load_classified(path):
-    with open(path) as f:
-        data = json.load(f)
-    items = data if isinstance(data, list) else data.get('items', [])
-    return pd.DataFrame(items)
+@st.cache_resource
+def get_bq_client():
+    from google.cloud import bigquery
+    return bigquery.Client(project=PROJECT_ID)
+
+
+@st.cache_data(ttl=600)   # 10분 캐시
+def load_from_bq(start_date: str, end_date: str) -> pd.DataFrame:
+    """voc_labelled.letters_posts 에서 분류된 데이터를 DataFrame 으로."""
+    client = get_bq_client()
+    query = f"""
+    SELECT id, source_type, master_id, master_name, user_id,
+           content, created_at, topic, subtag, sentiment, summary,
+           confidence, pipeline_date
+    FROM (
+      SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY classified_at DESC) as rn
+      FROM `{PROJECT_ID}.voc_labelled.letters_posts`
+      WHERE pipeline_date >= '{start_date}' AND pipeline_date <= '{end_date}'
+    )
+    WHERE rn = 1
+    """
+    df = client.query(query).to_dataframe()
+    # 대시보드 호환 필드
+    df["masterName"] = df["master_name"].fillna("Unknown")
+    df["createdAt"] = df["created_at"]
+    df["text"] = df["content"]
+    return df
 
 
 @st.cache_data
 def load_clusters(excel_path, review_path):
+    """로컬 클러스터링 결과 (exports/) — 개발팀 뷰 전용, 없으면 None 반환."""
+    if not Path(excel_path).exists() or not Path(review_path).exists():
+        return None, None, None
+
     from openpyxl import load_workbook
     wb = load_workbook(excel_path)
 
-    # Jira Tasks
     ws_tasks = wb["Jira Tasks"]
     tasks = []
     for row in ws_tasks.iter_rows(min_row=2, values_only=True):
@@ -44,7 +73,6 @@ def load_clusters(excel_path, review_path):
             })
     tasks_df = pd.DataFrame(tasks)
 
-    # Detail
     ws_detail = wb["전체 상세"]
     details = []
     for row in ws_detail.iter_rows(min_row=2, values_only=True):
@@ -55,7 +83,6 @@ def load_clusters(excel_path, review_path):
         })
     detail_df = pd.DataFrame(details)
 
-    # Review
     with open(review_path) as f:
         review = json.load(f)
     review_map = review.get('clusters', {})
@@ -66,43 +93,73 @@ def load_clusters(excel_path, review_path):
 # ── 사이드바 ──
 st.sidebar.title("VOC 대시보드")
 
-role = st.sidebar.radio("직군 선택", ["개발팀", "비개발팀"], index=0)
+role = st.sidebar.radio("직군 선택", ["개발팀", "비개발팀"], index=1)
 
-# 기간 선택
-periods = {
-    "1월": ("01", "exports/q1_2026_classified_all.json"),
-    "2월": ("02", "exports/classified_2026-02-01.json"),
-    "3월": ("03", "exports/classified_2026-03-01.json"),
+# 동적 기간 선택 — 프리셋 + 커스텀
+PRESETS = {
+    "최근 7일": 7,
+    "최근 14일": 14,
+    "최근 30일": 30,
+    "커스텀": None,
 }
-selected_period = st.sidebar.selectbox("기간", list(periods.keys()), index=1)
-period_key, classified_path = periods[selected_period]
+preset = st.sidebar.selectbox("기간 프리셋", list(PRESETS.keys()), index=0)
 
-# 데이터 로드
-cluster_excel = EXPORTS_DIR / f"tech_issues_clustered_2026_{period_key}.xlsx"
-review_json = EXPORTS_DIR / f"tech_issues_reviewed_2026_{period_key}.json"
-
-if cluster_excel.exists() and review_json.exists():
-    tasks_df, detail_df, review_map = load_clusters(cluster_excel, review_json)
+today = date.today()
+if PRESETS[preset] is not None:
+    end_date = today
+    start_date = today - timedelta(days=PRESETS[preset])
 else:
-    st.error("데이터 파일이 없습니다.")
+    start_date = st.sidebar.date_input("시작일", today - timedelta(days=7))
+    end_date = st.sidebar.date_input("종료일", today)
+
+start_str = start_date.strftime("%Y-%m-%d")
+end_str = end_date.strftime("%Y-%m-%d")
+st.sidebar.caption(f"기간: {start_str} ~ {end_str}")
+
+# BigQuery 조회
+with st.spinner(f"BigQuery 조회 중 ({start_str} ~ {end_str})..."):
+    try:
+        raw_df = load_from_bq(start_str, end_str)
+    except Exception as e:
+        st.error(f"BigQuery 조회 실패: {e}")
+        st.stop()
+
+if raw_df.empty:
+    st.warning(f"해당 기간({start_str} ~ {end_str})에 데이터가 없습니다. 일간 파이프라인 실행 여부 확인 필요.")
     st.stop()
 
-raw_df = load_classified(classified_path) if Path(classified_path).exists() else pd.DataFrame()
+st.sidebar.success(f"✓ {len(raw_df):,}건 로드")
 
-# 검수 결과 매핑
-cluster_type_map = {cid: info.get('type', '미검수') for cid, info in review_map.items()}
-cluster_label_map = {cid: info.get('label', '') for cid, info in review_map.items()}
-tasks_df['type'] = tasks_df['cluster'].map(cluster_type_map).fillna('미검수')
-tasks_df['label'] = tasks_df['cluster'].map(cluster_label_map).fillna(tasks_df['desc'])
-detail_df['type'] = detail_df['cluster'].map(cluster_type_map).fillna('미검수')
-detail_df['label'] = detail_df['cluster'].map(cluster_label_map).fillna(detail_df['desc'])
+# 클러스터링 데이터 (개발팀 뷰 전용 — 로컬 파일 있을 때만)
+period_key = start_date.strftime("%m")
+cluster_excel = EXPORTS_DIR / f"tech_issues_clustered_2026_{period_key}.xlsx"
+review_json = EXPORTS_DIR / f"tech_issues_reviewed_2026_{period_key}.json"
+tasks_df, detail_df, review_map = load_clusters(cluster_excel, review_json)
+has_clusters = tasks_df is not None
+
+# 검수 결과 매핑 (클러스터 데이터 있을 때만)
+if has_clusters:
+    cluster_type_map = {cid: info.get('type', '미검수') for cid, info in review_map.items()}
+    cluster_label_map = {cid: info.get('label', '') for cid, info in review_map.items()}
+    tasks_df['type'] = tasks_df['cluster'].map(cluster_type_map).fillna('미검수')
+    tasks_df['label'] = tasks_df['cluster'].map(cluster_label_map).fillna(tasks_df['desc'])
+    detail_df['type'] = detail_df['cluster'].map(cluster_type_map).fillna('미검수')
+    detail_df['label'] = detail_df['cluster'].map(cluster_label_map).fillna(detail_df['desc'])
 
 
 # ══════════════════════════════════════
 # 개발팀 뷰
 # ══════════════════════════════════════
 if role == "개발팀":
-    st.title(f"개발팀 — 기술이슈 & 기능요청 ({selected_period})")
+    st.title(f"개발팀 — 기술이슈 & 기능요청 ({start_str} ~ {end_str})")
+
+    if not has_clusters:
+        st.info(
+            "클러스터링 데이터(`exports/tech_issues_clustered_*.xlsx`)가 없습니다. "
+            "피드백 클러스터링 결과가 아직 BigQuery 로 이관되지 않은 상태입니다. "
+            "비개발팀 뷰에서 원문 검색으로 이슈 확인이 가능합니다."
+        )
+        st.stop()
 
     # 기술이슈 + 기능요청만
     tech_types = {'기술이슈', '기능요청'}
@@ -175,11 +232,7 @@ if role == "개발팀":
 # 비개발팀 뷰
 # ══════════════════════════════════════
 else:
-    st.title(f"VOC 인사이트 대시보드 ({selected_period})")
-
-    if raw_df.empty:
-        st.warning("원본 데이터가 없습니다.")
-        st.stop()
+    st.title(f"VOC 인사이트 대시보드 ({start_str} ~ {end_str})")
 
     # ── 전체 요약 ──
     total = len(raw_df)
@@ -234,31 +287,32 @@ else:
             width='stretch',
         )
 
-    # ── 주요 이슈 (운영/CS) ──
-    st.divider()
-    st.subheader("주요 이슈")
+    # ── 주요 이슈 (운영/CS) — 클러스터 데이터 있을 때만 ──
+    if has_clusters:
+        st.divider()
+        st.subheader("주요 이슈")
 
-    ops_types = {'운영이슈', 'CS이슈'}
-    ops_tasks = tasks_df[tasks_df['type'].apply(lambda x: any(t in str(x) for t in ops_types))]
-    ops_tasks = ops_tasks.sort_values('count', ascending=False)
+        ops_types = {'운영이슈', 'CS이슈'}
+        ops_tasks = tasks_df[tasks_df['type'].apply(lambda x: any(t in str(x) for t in ops_types))]
+        ops_tasks = ops_tasks.sort_values('count', ascending=False)
 
-    for _, row in ops_tasks.head(15).iterrows():
-        cid = row['cluster']
-        count = row['count']
-        label = row['label']
-        issue_type = row['type']
+        for _, row in ops_tasks.head(15).iterrows():
+            cid = row['cluster']
+            count = row['count']
+            label = row['label']
+            issue_type = row['type']
 
-        badge = "🔴" if count >= 5 else "🟡" if count >= 3 else "🟢"
+            badge = "🔴" if count >= 5 else "🟡" if count >= 3 else "🟢"
 
-        with st.expander(f"{badge} [{issue_type}] {label} ({count}건)"):
-            cols = st.columns([1, 1])
-            cols[0].write(f"**커뮤니티:** {row.get('communities', '')}")
-            cols[1].write(f"**기간:** {row.get('date_range', '')}")
+            with st.expander(f"{badge} [{issue_type}] {label} ({count}건)"):
+                cols = st.columns([1, 1])
+                cols[0].write(f"**커뮤니티:** {row.get('communities', '')}")
+                cols[1].write(f"**기간:** {row.get('date_range', '')}")
 
-            items = detail_df[detail_df['cluster'] == cid]
-            for _, item in items.iterrows():
-                border = '#dc3545' if item.get('sentiment') == '부정' else '#6c757d'
-                st.markdown(f"""
+                items = detail_df[detail_df['cluster'] == cid]
+                for _, item in items.iterrows():
+                    border = '#dc3545' if item.get('sentiment') == '부정' else '#6c757d'
+                    st.markdown(f"""
 <div style="background:#f8f9fa;padding:10px;border-radius:5px;margin:4px 0;border-left:3px solid {border};">
 <small><b>{item.get('source','')}</b> | {item.get('master','')} | {item.get('date','')}</small><br>
 <span style="color:#333;">{str(item.get('text',''))[:300]}</span>
