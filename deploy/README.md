@@ -4,10 +4,9 @@ Cloud Run Jobs + Cloud Scheduler 기반 운영 세팅.
 
 ## 스코프
 
-- ✅ **일간 파이프라인** (`run_daily_pipeline.py --skip-channel`) — 편지글/게시글 분류 → voc_labelled
-- ✅ **주간 리포트** (`generate_weekly_report_v5.py`) — 분류 → 리포트 → Notion/Slack
-- ⏭️ **채널톡 KcELECTRA 분류** — 이미지 포함 (Dockerfile)은 되어있으나 초기 배포 스코프 제외
-  - 필요 시 `--skip-channel` 제거 + 메모리 상향으로 활성화 가능
+- ✅ **일간 파이프라인** (`run_daily_pipeline.py`) — 편지글/게시글 (Bedrock Haiku) + 채널톡 (KcELECTRA + Bedrock fallback) → voc_labelled
+- ✅ **주간 리포트** (`generate_weekly_report_v5.py`) — voc_labelled 읽기 → 리포트 → Notion/Slack
+- ✅ **대시보드** (`voc_dashboard.py`) — Cloud Run Service, BigQuery 직접 조회
 
 ## 아키텍처
 
@@ -156,7 +155,6 @@ bash deploy/deploy_dashboard.sh
 
 ## 다음 단계 (TODO)
 
-- [ ] 채널톡 KcELECTRA 활성화 (메모리 증설 + `--skip-channel` 제거)
 - [ ] 일간 파이프라인 완료 시 Slack 모니터링 메시지 (대시보드 URL + 부정 이슈 요약)
 - [ ] 일간 파이프라인 실패 시 Slack 알림 (sanity check fail 시 주간이 막히므로)
 - [ ] 대시보드 IAP 적용 (회사 Google Workspace 계정 인증)

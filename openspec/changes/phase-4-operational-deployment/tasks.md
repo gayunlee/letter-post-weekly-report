@@ -8,7 +8,7 @@
 
 ### 일간 파이프라인 (이미 존재, 재확인)
 - [x] `run_daily_pipeline.py` 검토: Bedrock v5 분류 + voc_labelled 적재 + 부정 급증 Slack
-- [x] `--skip-channel` 옵션 활용 (KcELECTRA 초기 스코프 제외)
+- [x] 채널톡 KcELECTRA 활성화 (모델 489MB, 메모리 4Gi, channel_io.messages 적재 정상 확인)
 
 ### 주간 파이프라인 (재구조)
 - [x] `generate_weekly_report_v5.py` 를 voc_labelled 읽기 전용으로 변경 (Phase 2 분류 단계 삭제)
@@ -66,5 +66,4 @@
 
 - [ ] **Phase 4-1**: 일간 완료 Slack 모니터링 메시지 (대시보드 URL + 부정 요약)
 - [ ] **Phase 4-2**: 일간 실패 Slack 알림 (sanity check fail 시 주간이 막힘)
-- [ ] **Phase 4-3**: 채널톡 KcELECTRA 활성화 (메모리 증설 + `--skip-channel` 제거)
 - [ ] **Phase 5**: `cluster_tech_issues.py` voc_labelled 읽기로 전환 (분기 분석 시점에)

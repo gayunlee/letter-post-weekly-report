@@ -24,18 +24,18 @@ SLACK_CHANNEL_ID=slack-channel-id:latest"
 
 COMMON_ENV="BIGQUERY_PROJECT_ID=${PROJECT_ID},PYTHONUNBUFFERED=1"
 
-# ── Job 1: 일간 파이프라인 ──────────────────────────
+# ── Job 1: 일간 파이프라인 (편지/게시글 + 채널톡 KcELECTRA) ──
 echo ">> voc-daily Cloud Run Job 생성/업데이트"
 gcloud run jobs deploy voc-daily \
     --image="${IMAGE}" \
     --region="${REGION}" \
     --service-account="${SA_EMAIL}" \
     --command=python \
-    --args="scripts/run_daily_pipeline.py,--skip-channel" \
+    --args="scripts/run_daily_pipeline.py" \
     --set-env-vars="${COMMON_ENV}" \
     --set-secrets="${SECRETS}" \
-    --task-timeout=1800 \
-    --memory=2Gi \
+    --task-timeout=2400 \
+    --memory=4Gi \
     --cpu=2 \
     --max-retries=1
 

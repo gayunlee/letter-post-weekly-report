@@ -20,8 +20,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 pip install -r requirements.txt
 
 # 일간 분류 (어제 KST 일자) — 정상 운영에서는 Cloud Run Job 자동 실행
-python scripts/run_daily_pipeline.py --skip-channel
-python scripts/run_daily_pipeline.py --date 2026-04-10 --skip-channel  # 백필
+python scripts/run_daily_pipeline.py                       # 편지/게시글 + 채널톡
+python scripts/run_daily_pipeline.py --date 2026-04-10     # 백필
+python scripts/run_daily_pipeline.py --skip-channel        # 채널톡 제외 시
 
 # 주간 리포트 (지난 주 voc_labelled 읽기) — 정상 운영에서는 Cloud Run Job 자동 실행
 python scripts/generate_weekly_report_v5.py

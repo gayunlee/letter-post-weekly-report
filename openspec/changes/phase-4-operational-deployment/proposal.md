@@ -29,7 +29,7 @@ us_plus_next  ──→  voc-daily Cloud Run Job  ──→  voc-weekly Cloud Ru
 
 | 컴포넌트 | 트리거 | 입력 | 출력 |
 |---------|--------|------|------|
-| `voc-daily` | Cloud Scheduler 매일 08:00 | 어제 KST 일자의 us_plus_next 원본 | voc_labelled 적재 + 부정 급증 Slack |
+| `voc-daily` | Cloud Scheduler 매일 08:00 | 어제 us_plus_next + channel_io.messages | voc_labelled 적재 + 부정 급증 Slack |
 | `voc-weekly` | Cloud Scheduler 매주 월 09:00 | 지난 주 voc_labelled | Notion 페이지 + Slack 알림 + 엑셀 첨부 |
 | `voc-dashboard` | 사용자 브라우저 | voc_labelled (최근 7/14/30일 / 커스텀) | Streamlit 웹 UI |
 | `cluster_tech_issues` | Gayoon 수동 (분기 1회) | 로컬 voc_labelled export | 클러스터링 엑셀 (개발팀 분기 분석) |
@@ -42,7 +42,6 @@ us_plus_next  ──→  voc-daily Cloud Run Job  ──→  voc-weekly Cloud Ru
 
 ## Out of Scope (이번 단계 제외)
 
-- 채널톡 KcELECTRA 자동 분류 — 일간에서 `--skip-channel`. 메모리/모델 검증 후 별도 phase
 - 일간 완료 시 Slack 모니터링 메시지 (대시보드 URL + 부정 요약) — 별도 작업
 - 일간 파이프라인 자체 실패 시 Slack 알림 — 별도 작업
 - 대시보드 IAP 인증 — 초기 `--allow-unauthenticated`, 운영 시작 후 적용
