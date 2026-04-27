@@ -2,7 +2,8 @@
 .env
 accountKey.json
 chroma_db/
-data/
+data/*
+!data/config/
 reports/
 benchmarks/
 notebooks/

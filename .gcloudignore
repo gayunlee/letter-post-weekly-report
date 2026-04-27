@@ -17,11 +17,12 @@ env/
 .eggs/
 *.egg-info/
 
-# Local data — 컨테이너 불필요
+# Local data — 컨테이너 불필요 (단, data/config/ 는 분류 어휘 통제용 필수)
 chroma_db/
 chroma_db_backup_*/
 chroma_db_two_axis/
-data/
+data/*
+!data/config/
 reports/
 exports/
 benchmarks/

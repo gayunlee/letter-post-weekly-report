@@ -16,6 +16,9 @@ COPY src/ src/
 COPY scripts/ scripts/
 COPY dashboard/ dashboard/
 
+# 분류 어휘 통제 설정 (v5_subtags.json) — 없으면 모든 subtag가 "기타"로 폴백됨
+COPY data/config/ data/config/
+
 # KcELECTRA 모델
 COPY models/channel_3class/kcelectra-base-v2022-v9-boost/final_model/ models/channel_3class/kcelectra-base-v2022-v9-boost/final_model/
 
