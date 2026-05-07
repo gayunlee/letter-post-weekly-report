@@ -116,8 +116,7 @@ def send_daily_summary(items, channel_items, pipeline_date, cost_usd):
     # 메시지 조립
     parts = [f"📊 *VOC 일간 요약 — {pipeline_date}*", ""]
     parts.append(f"*편지/게시글*: {lp_total}건 (편지 {letter_n}, 게시글 {post_n})")
-    if ch_total:
-        parts.append(f"*채널톡*: {ch_total:,}건")
+    parts.append(f"*채널톡*: {ch_total:,}건")
     parts.append("")
 
     if lp_total:
@@ -320,10 +319,10 @@ def _run_pipeline(args, target_date, next_date, current_phase, pipeline_start):
             try:
                 from src.bigquery.channel_queries import ChannelQueryService
                 ch_query = ChannelQueryService(bq_client)
-                ch_data = ch_query.get_daily_chats(target_date, next_date)
+                messages, chat_states = ch_query.get_weekly_conversations(target_date, next_date)
 
                 from src.bigquery.channel_preprocessor import build_chat_items
-                channel_items = build_chat_items(ch_data)
+                channel_items = build_chat_items(messages, chat_states=chat_states)
                 logger.info(f"  채널톡 {len(channel_items)}건 조회")
 
                 if args.dry_run:
@@ -331,12 +330,18 @@ def _run_pipeline(args, target_date, next_date, current_phase, pipeline_start):
 
                 channel_items = ch_classifier.classify_batch(channel_items)
                 logger.info(f"  채널톡 분류 완료: {len(channel_items)}건")
-            except ImportError:
-                logger.warning("  채널톡 쿼리 모듈 없음 — 건너뜀")
+            except ImportError as e:
+                logger.error(f"  채널톡 쿼리 모듈 없음: {e}")
+                if not args.skip_slack:
+                    send_failure_alert(e, target_date, "Phase 3: 채널톡 (모듈 없음)")
             except Exception as e:
-                logger.warning(f"  채널톡 처리 실패: {e}")
+                logger.error(f"  채널톡 처리 실패: {e}")
+                if not args.skip_slack:
+                    send_failure_alert(e, target_date, "Phase 3: 채널톡")
         except Exception as e:
-            logger.warning(f"  KcELECTRA 로드 실패: {e}")
+            logger.error(f"  KcELECTRA 로드 실패: {e}")
+            if not args.skip_slack:
+                send_failure_alert(e, target_date, "Phase 3: KcELECTRA 로드")
 
     # ── Phase 4: BigQuery 저장 ──
     current_phase[0] = "Phase 4: BigQuery 저장"

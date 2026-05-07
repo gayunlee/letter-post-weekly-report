@@ -101,12 +101,12 @@ class BigQueryWriter:
             errors = self.client.insert_rows_json(table_id, rows)
             if errors:
                 logger.error(f"BigQuery 삽입 에러: {errors[:3]}")
-            else:
-                logger.info(f"  letters_posts 저장: {len(rows)}건")
+                return 0
+            logger.info(f"  letters_posts 저장: {len(rows)}건")
 
         return len(rows)
 
-    def write_channel_talk(self, items, pipeline_date, classifier_model="kcelectra-v9 + bedrock-sonnet-3.7"):
+    def write_channel_talk(self, items, pipeline_date, classifier_model="kcelectra-v9 + bedrock-haiku-4.5"):
         """채널톡 분류 결과 저장"""
         table_id = self._ensure_table("channel_talk", CHANNEL_TALK_SCHEMA)
         self._delete_existing(table_id, pipeline_date)
@@ -115,10 +115,15 @@ class BigQueryWriter:
         rows = []
         for item in items:
             cls = item.get("classification", {})
+            ts = item.get("first_message_at")
+            if isinstance(ts, (int, float)):
+                ts = datetime.utcfromtimestamp(ts / 1000).isoformat()
+            elif not ts:
+                ts = None
             rows.append({
                 "chat_id": item.get("chatId", ""),
                 "text": item.get("text", "")[:5000],
-                "created_at": item.get("createdAt", ""),
+                "created_at": ts,
                 "classified_at": now,
                 "topic": cls.get("topic", ""),
                 "confidence": cls.get("confidence", 0.0),
@@ -133,7 +138,7 @@ class BigQueryWriter:
             errors = self.client.insert_rows_json(table_id, rows)
             if errors:
                 logger.error(f"BigQuery 삽입 에러: {errors[:3]}")
-            else:
-                logger.info(f"  channel_talk 저장: {len(rows)}건")
+                return 0
+            logger.info(f"  channel_talk 저장: {len(rows)}건")
 
         return len(rows)

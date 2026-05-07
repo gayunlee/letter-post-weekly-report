@@ -14,7 +14,7 @@ from .subtag_prompt import SUBTAG_SYSTEM_PROMPT, SUBTAGS
 
 logger = logging.getLogger(__name__)
 
-BEDROCK_MODEL_ID = "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+BEDROCK_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 class BedrockTwoDepthClassifier(TwoDepthClassifier):
