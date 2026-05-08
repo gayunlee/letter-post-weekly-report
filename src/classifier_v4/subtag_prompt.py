@@ -38,7 +38,15 @@ SUBTAG_SYSTEM_PROMPT = {
 - "결제 됐나요?", "입금 확인", "결제 내역"
 
 ## 응답
-JSON만: {"subtag": "환불"}""",
+JSON만:
+{"subtag": "환불", "is_compound": false, "compound_reason": null, "summary": "문의 요약", "tags": ["키워드1", "키워드2"]}
+
+## 복합 맥락 판단
+- is_compound는 subtag만으로 설명되지 않는 추가 맥락이 있을 때만 true.
+- compound_reason은 true일 때만 작성하고, subtag를 반복하지 말 것.
+- 예: 환불 요청이 수강 접근 오류나 자동결제 인지 문제에서 비롯된 경우.
+- 복합 맥락이 없으면 false와 null.
+- summary는 80자 이내, tags는 검색용 핵심 키워드 최대 4개.""",
 
     "콘텐츠·수강": """채널톡 CS 문의 중 "콘텐츠·수강" 버킷입니다.
 아래 서브태그 중 **가장 적합한 1개**를 선택하세요.
@@ -78,7 +86,15 @@ JSON만: {"subtag": "환불"}""",
 - "강의가 기대와 달라요", "콘텐츠 구성 개선", "시간대 변경 요청"
 
 ## 응답
-JSON만: {"subtag": "수강방법"}""",
+JSON만:
+{"subtag": "수강방법", "is_compound": false, "compound_reason": null, "summary": "문의 요약", "tags": ["키워드1", "키워드2"]}
+
+## 복합 맥락 판단
+- is_compound는 subtag만으로 설명되지 않는 추가 맥락이 있을 때만 true.
+- compound_reason은 true일 때만 작성하고, subtag를 반복하지 말 것.
+- 예: 수강 접근 문제가 환불 요구나 결제 확인으로 이어진 경우.
+- 복합 맥락이 없으면 false와 null.
+- summary는 80자 이내, tags는 검색용 핵심 키워드 최대 4개.""",
 
     "기술·오류": """채널톡 CS 문의 중 "기술·오류" 버킷입니다.
 아래 서브태그 중 **가장 적합한 1개**를 선택하세요.
@@ -115,7 +131,15 @@ JSON만: {"subtag": "수강방법"}""",
 - "번호 바뀌었어요", "카카오에서 전화번호 로그인으로", "아이디 변경"
 
 ## 응답
-JSON만: {"subtag": "로그인불가"}""",
+JSON만:
+{"subtag": "로그인불가", "is_compound": false, "compound_reason": null, "summary": "문의 요약", "tags": ["키워드1", "키워드2"]}
+
+## 복합 맥락 판단
+- is_compound는 subtag만으로 설명되지 않는 추가 맥락이 있을 때만 true.
+- compound_reason은 true일 때만 작성하고, subtag를 반복하지 말 것.
+- 예: 기술 오류가 콘텐츠 접근 실패나 환불 요구로 이어진 경우.
+- 복합 맥락이 없으면 false와 null.
+- summary는 80자 이내, tags는 검색용 핵심 키워드 최대 4개.""",
 }
 
 # 서브태그 목록

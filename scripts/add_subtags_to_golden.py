@@ -34,8 +34,8 @@ def main():
         text = item.get("text", "")
         route = item.get("route", "")
 
-        # abandoned는 분류 스킵
-        if route == "abandoned":
+        # opened는 완료 경로가 확정되지 않아 분류 스킵
+        if route in ("opened", "abandoned"):
             item["subtags"] = []
             item["kcelectra_topic"] = None
             item["kcelectra_confidence"] = None

@@ -1,6 +1,6 @@
 """BigQuery Writer — voc_labelled 데이터셋에 분류 결과 저장"""
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from google.cloud import bigquery
 
 logger = logging.getLogger(__name__)
@@ -34,8 +34,15 @@ CHANNEL_TALK_SCHEMA = [
     bigquery.SchemaField("topic", "STRING"),
     bigquery.SchemaField("confidence", "FLOAT"),
     bigquery.SchemaField("subtag", "STRING"),
+    bigquery.SchemaField("is_compound", "BOOLEAN"),
+    bigquery.SchemaField("compound_reason", "STRING"),
+    bigquery.SchemaField("summary", "STRING"),
+    bigquery.SchemaField("tags", "STRING", mode="REPEATED"),
     bigquery.SchemaField("source", "STRING"),  # kcelectra / llm_fallback
     bigquery.SchemaField("route", "STRING"),
+    bigquery.SchemaField("workflow_buttons", "STRING", mode="REPEATED"),
+    bigquery.SchemaField("has_free_text", "BOOLEAN"),
+    bigquery.SchemaField("interaction_type", "STRING"),
     bigquery.SchemaField("classifier_model", "STRING"),
     bigquery.SchemaField("pipeline_date", "DATE"),
 ]
@@ -57,6 +64,16 @@ class BigQueryWriter:
             field="pipeline_date",
         )
         table = self.client.create_table(table, exists_ok=True)
+        existing = {field.name for field in table.schema}
+        missing = [field for field in schema if field.name not in existing]
+        if missing:
+            table.schema = list(table.schema) + missing
+            table = self.client.update_table(table, ["schema"])
+            logger.info(
+                "  BigQuery 스키마 컬럼 추가: %s / %s",
+                table_id,
+                ", ".join(field.name for field in missing),
+            )
         return table_id
 
     def _delete_existing(self, table_id, pipeline_date):
@@ -73,7 +90,7 @@ class BigQueryWriter:
         table_id = self._ensure_table("letters_posts", LETTERS_POSTS_SCHEMA)
         self._delete_existing(table_id, pipeline_date)
 
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         rows = []
         for item in items:
             cls = item.get("classification", {})
@@ -111,13 +128,13 @@ class BigQueryWriter:
         table_id = self._ensure_table("channel_talk", CHANNEL_TALK_SCHEMA)
         self._delete_existing(table_id, pipeline_date)
 
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         rows = []
         for item in items:
             cls = item.get("classification", {})
             ts = item.get("first_message_at")
             if isinstance(ts, (int, float)):
-                ts = datetime.utcfromtimestamp(ts / 1000).isoformat()
+                ts = datetime.fromtimestamp(ts / 1000, timezone.utc).isoformat()
             elif not ts:
                 ts = None
             rows.append({
@@ -128,14 +145,23 @@ class BigQueryWriter:
                 "topic": cls.get("topic", ""),
                 "confidence": cls.get("confidence", 0.0),
                 "subtag": cls.get("subtag", ""),
+                "is_compound": bool(cls.get("is_compound", False)),
+                "compound_reason": cls.get("compound_reason"),
+                "summary": cls.get("summary", ""),
+                "tags": cls.get("tags", []) if isinstance(cls.get("tags", []), list) else [],
                 "source": cls.get("source", ""),
                 "route": item.get("route", ""),
+                "workflow_buttons": item.get("workflow_buttons", [])
+                if isinstance(item.get("workflow_buttons", []), list)
+                else [],
+                "has_free_text": bool(item.get("has_free_text", False)),
+                "interaction_type": item.get("interaction_type", ""),
                 "classifier_model": classifier_model,
                 "pipeline_date": pipeline_date,
             })
 
         if rows:
-            errors = self.client.insert_rows_json(table_id, rows)
+            errors = self.client.insert_rows_json(table_id, rows, ignore_unknown_values=True)
             if errors:
                 logger.error(f"BigQuery 삽입 에러: {errors[:3]}")
                 return 0

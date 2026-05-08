@@ -71,7 +71,7 @@ def main():
         text = item.get("text", "")
         route = item.get("route", "")
 
-        if route == "abandoned":
+        if route in ("opened", "abandoned"):
             item["subtags"] = []
             continue
 

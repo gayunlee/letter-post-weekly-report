@@ -51,9 +51,33 @@ def parse_workflow_buttons(user_messages: List[Dict[str, Any]]) -> List[str]:
     buttons = []
     for msg in user_messages:
         text = (msg.get("plainText") or "").strip()
-        if text in WORKFLOW_BUTTONS:
+        if text in WORKFLOW_BUTTONS or text.startswith("👆🏻"):
             buttons.append(text)
     return buttons
+
+
+def strip_workflow_only_lines(text: str) -> str:
+    """분류 텍스트에서 버튼/워크플로우 선택지만 제거한다."""
+    cleaned = []
+    for line in (text or "").split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped in WORKFLOW_BUTTONS:
+            continue
+        if stripped.startswith("👆🏻"):
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned).strip()
+
+
+def classify_interaction_type(has_free_text: bool, workflow_buttons: List[str]) -> str:
+    """자연어 문의와 워크플로우 선택 신호를 분리하기 위한 interaction 유형."""
+    if has_free_text and workflow_buttons:
+        return "mixed"
+    if has_free_text:
+        return "free_text"
+    return "workflow_only"
 
 
 def detect_route(
@@ -69,7 +93,7 @@ def detect_route(
         chat_state: chats 테이블의 state ("closed" / "opened")
 
     Returns:
-        "manager_resolved" | "bot_resolved" | "abandoned"
+        "manager_resolved" | "bot_resolved" | "opened"
     """
     if chat_state == "closed":
         if manager_message_count > 0:
@@ -77,7 +101,7 @@ def detect_route(
         else:
             return "bot_resolved"
     else:  # opened 또는 state 정보 없음
-        return "abandoned"
+        return "opened"
 
 
 def group_by_chat(messages: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
@@ -150,6 +174,7 @@ def build_chat_items(
 
     for chat_id, chat_messages in groups.items():
         text = extract_user_text(chat_messages)
+        classifiable_text = strip_workflow_only_lines(text)
 
         if len(text) < min_user_chars:
             continue
@@ -162,13 +187,8 @@ def build_chat_items(
         # 워크플로우 버튼 파싱
         buttons = parse_workflow_buttons(user_messages)
 
-        # 자유 텍스트 존재 여부 (버튼 외 텍스트가 있는지)
-        free_text_msgs = [
-            m for m in user_messages
-            if (m.get("plainText") or "").strip()
-            and (m.get("plainText") or "").strip() not in WORKFLOW_BUTTONS
-        ]
-        has_free_text = len(free_text_msgs) > 0
+        has_free_text = len(classifiable_text) >= min_user_chars
+        interaction_type = classify_interaction_type(has_free_text, buttons)
 
         # route 판정
         chat_state = chat_states.get(chat_id)
@@ -177,6 +197,7 @@ def build_chat_items(
         items.append({
             "chatId": chat_id,
             "text": text,
+            "classifiable_text": classifiable_text,
             "message_count": len(chat_messages),
             "user_message_count": user_count,
             "bot_message_count": bot_count,
@@ -186,6 +207,7 @@ def build_chat_items(
             "source": "channel_io",
             "workflow_buttons": buttons,
             "has_free_text": has_free_text,
+            "interaction_type": interaction_type,
             "route": route,
         })
 

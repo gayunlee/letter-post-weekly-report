@@ -1059,7 +1059,8 @@ with tabs[3]:
         route_labels = {
             "manager_resolved": "상담사 처리 🧑‍💼",
             "bot_resolved": "봇 자동 처리 🤖",
-            "abandoned": "이탈 (미처리) ⚠️",
+            "opened": "열림 상태",
+            "abandoned": "열림 상태",
         }
         cols = st.columns(len(route_cnt))
         for i, (route, cnt) in enumerate(route_cnt.items()):

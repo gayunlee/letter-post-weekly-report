@@ -9,8 +9,13 @@ import logging
 
 import boto3
 
-from .two_depth_classifier import TwoDepthClassifier, strip_workflow_buttons, ID_TO_CATEGORY
-from .subtag_prompt import SUBTAG_SYSTEM_PROMPT, SUBTAGS
+from .two_depth_classifier import (
+    TwoDepthClassifier,
+    strip_workflow_buttons,
+    ID_TO_CATEGORY,
+)
+from .subtag_detail import empty_subtag_detail, normalize_subtag_detail
+from .subtag_prompt import SUBTAG_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -94,16 +99,16 @@ JSON만: {{"topic": "결제·구독"}}
         except Exception:
             return {"topic": "콘텐츠·수강"}
 
-    def classify_subtag(self, text, topic):
-        """2차: 서브태그 부여 (Bedrock)"""
+    def classify_subtag_detail(self, text, topic):
+        """2차: 서브태그와 리포트용 맥락 필드 추출 (Bedrock)."""
         if topic not in SUBTAG_SYSTEM_PROMPT:
-            return "기타"
+            return empty_subtag_detail()
 
         prompt_text = strip_workflow_buttons(text)[:500]
-        raw = self._bedrock_call(SUBTAG_SYSTEM_PROMPT[topic], prompt_text)
+        raw = self._bedrock_call(SUBTAG_SYSTEM_PROMPT[topic], prompt_text, max_tokens=250)
 
         if not raw:
-            return "기타"
+            return empty_subtag_detail()
 
         try:
             start = raw.find("{")
@@ -112,10 +117,10 @@ JSON만: {{"topic": "결제·구독"}}
                 result = json.loads(raw[start:end])
             else:
                 result = json.loads(raw)
-            subtag = result.get("subtag", "기타")
-            valid = SUBTAGS.get(topic, [])
-            if subtag not in valid:
-                subtag = "기타"
-            return subtag
+            return normalize_subtag_detail(result, topic)
         except Exception:
-            return "기타"
+            return empty_subtag_detail()
+
+    def classify_subtag(self, text, topic):
+        """2차: 서브태그 부여. 기존 호출부 호환을 위해 문자열만 반환."""
+        return self.classify_subtag_detail(text, topic)["subtag"]

@@ -32,7 +32,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 CHANNEL_TOPICS = ["결제·환불", "구독·멤버십", "콘텐츠·수강", "기술·오류", "기타"]
-CHANNEL_ROUTES = ["manager_resolved", "bot_resolved", "abandoned"]
+CHANNEL_ROUTES = ["manager_resolved", "bot_resolved", "opened"]
 
 
 def load_golden(path):

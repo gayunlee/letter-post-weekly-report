@@ -154,15 +154,17 @@ def main():
     else:
         # manager_resolved + bot_resolved만 분류
         classify_targets = [
-            item for item in items if item["route"] in ("manager_resolved", "bot_resolved")
+            item for item in items
+            if item["route"] in ("manager_resolved", "bot_resolved")
+            and item.get("has_free_text")
         ]
         skip_count = len(items) - len(classify_targets)
         print(f"\n[4] Topic 분류 (Haiku API)...")
-        print(f"  분류 대상: {len(classify_targets):,}건 (abandoned {skip_count}건 제외)")
+        print(f"  분류 대상: {len(classify_targets):,}건 (opened/workflow_only {skip_count}건 제외)")
 
         if classify_targets:
             classifier = ChannelClassifier()
-            classifier.classify_batch(classify_targets, content_field="text")
+            classifier.classify_batch(classify_targets, content_field="classifiable_text")
 
             # 비용 리포트
             cost = classifier.get_cost_report()

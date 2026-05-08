@@ -27,7 +27,6 @@ def export_to_excel(
         cls = letter.get("classification", {})
         letter_rows.append({
             "마스터": letter.get("masterName", "Unknown"),
-            "클럽": letter.get("masterClubName", ""),
             "내용": letter.get("message", ""),
             "라벨": cls.get("category", "") or letter.get("topic", "미분류"),
             "세부분류": cls.get("subtag", "") or letter.get("subtag", ""),
@@ -42,7 +41,6 @@ def export_to_excel(
         cls = post.get("classification", {})
         post_rows.append({
             "마스터": post.get("masterName", "Unknown"),
-            "클럽": post.get("masterClubName", ""),
             "제목": post.get("title", ""),
             "내용": content,
             "라벨": cls.get("category", "") or post.get("topic", "미분류"),
@@ -75,7 +73,6 @@ def _set_column_widths(worksheet, df: pd.DataFrame):
     # 기본 열 너비 설정
     column_widths = {
         '마스터': 15,
-        '클럽': 20,
         '제목': 40,
         '내용': 80,
         '라벨': 15,

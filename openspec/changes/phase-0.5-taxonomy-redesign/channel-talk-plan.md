@@ -7,7 +7,7 @@
 - **총 메시지**: 431,589건, 주간 ~1,000건 대화
 - **personType**: bot 68% / user 20% / manager 12%
 - **중복**: 모든 메시지가 2번씩 존재 → dedup 필수
-- **state** (chats): closed 21,154 / opened 14,228 (40% 방치)
+- **state** (chats): closed 21,154 / opened 14,228 (opened는 Channel.io 원본 상태, 방치로 단정하지 않음)
 - **워크플로우**: 봇 인사 → 버튼 선택 → 봇 가이드 → (1:1 전환) → 매니저 응답 → 종료
 
 ## 분류 목적
@@ -25,7 +25,7 @@
 |-------|------|------|
 | `manager_resolved` | manager_message_count > 0 AND state="closed" | 매니저 개입 해결 |
 | `bot_resolved` | manager_message_count == 0 AND state="closed" | 봇만으로 해결 (워크플로우) |
-| `abandoned` | state="opened" OR (state="closed" AND 사용자 메시지 없음) | 이탈/방치/무응답 |
+| `opened` | state="opened" OR state 정보 없음 | 종료 상태가 closed로 확인되지 않은 대화 |
 
 판정 로직:
 ```python
@@ -36,7 +36,7 @@ def detect_route(chat_item, chat_state):
         else:
             return "bot_resolved"
     else:  # opened
-        return "abandoned"
+        return "opened"
 ```
 
 ### Axis 2: 문의 주제 (topics) — 다중 태그 LLM 분류

@@ -17,7 +17,8 @@ import torch
 from typing import Dict, Any, Optional, List
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
-from .subtag_prompt import SUBTAG_SYSTEM_PROMPT, SUBTAGS
+from .subtag_prompt import SUBTAG_SYSTEM_PROMPT
+from .subtag_detail import empty_subtag_detail, normalize_subtag_detail
 
 WORKFLOW_NOISE = [
     "그 외 기타 문의(오류/구독해지/환불)", "그 외 기타 문의",
@@ -149,17 +150,17 @@ JSON만: {{"topic": "결제·구독"}}
         except Exception:
             return {"topic": "콘텐츠·수강"}
 
-    def classify_subtag(self, text: str, topic: str) -> str:
-        """2차: 서브태그 부여"""
+    def classify_subtag_detail(self, text: str, topic: str) -> Dict[str, Any]:
+        """2차: 서브태그와 리포트용 맥락 필드 추출."""
         if topic not in SUBTAG_SYSTEM_PROMPT:
-            return "기타"
+            return empty_subtag_detail()
 
         prompt_text = strip_workflow_buttons(text)[:500]
 
         try:
             resp = self.llm_client.messages.create(
                 model=self.llm_model,
-                max_tokens=50,
+                max_tokens=250,
                 system=SUBTAG_SYSTEM_PROMPT[topic],
                 messages=[{"role": "user", "content": prompt_text}],
                 timeout=15.0,
@@ -170,13 +171,13 @@ JSON만: {{"topic": "결제·구독"}}
                 if raw.startswith("json"):
                     raw = raw[4:]
             result = json.loads(raw.strip())
-            subtag = result.get("subtag", "기타")
-            valid = SUBTAGS.get(topic, [])
-            if subtag not in valid:
-                subtag = "기타"
-            return subtag
+            return normalize_subtag_detail(result, topic)
         except Exception:
-            return "기타"
+            return empty_subtag_detail()
+
+    def classify_subtag(self, text: str, topic: str) -> str:
+        """2차: 서브태그 부여. 기존 호출부 호환을 위해 문자열만 반환."""
+        return self.classify_subtag_detail(text, topic)["subtag"]
 
     def classify(self, text: str) -> Dict[str, Any]:
         """전체 2-depth 분류"""
@@ -192,7 +193,7 @@ JSON만: {{"topic": "결제·구독"}}
 
         # 2차: 서브태그
         if self.subtag_all or result["source"] == "llm_fallback":
-            result["subtag"] = self.classify_subtag(text, result["topic"])
+            result.update(self.classify_subtag_detail(text, result["topic"]))
 
         return result
 
@@ -200,7 +201,11 @@ JSON만: {{"topic": "결제·구독"}}
         """배치 분류"""
         results = []
         for item in items:
-            text = item.get(text_field, "")
+            if item.get("has_free_text") is False:
+                results.append(item)
+                continue
+
+            text = item.get("classifiable_text") or item.get(text_field, "")
             classification = self.classify(text)
             item["classification"] = classification
             results.append(item)

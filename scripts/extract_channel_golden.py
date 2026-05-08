@@ -48,7 +48,7 @@ def stratified_sample(items, n, seed=42):
     """route × topic 층화 샘플링
 
     각 (route, topic) 셀에서 비례 배분 + 최소 보장.
-    abandoned은 topic이 없으므로 route만으로 그룹.
+    opened는 topic이 없으므로 route만으로 그룹.
     """
     random.seed(seed)
 
@@ -208,7 +208,7 @@ def main():
                 "4. 확정된 파일을 data/channel_io/golden/channel_golden_v1.json으로 저장"
             ),
             "topic_options": ["결제·환불", "구독·멤버십", "콘텐츠·수강", "기술·오류", "기타"],
-            "route_options": ["manager_resolved", "bot_resolved", "abandoned"],
+            "route_options": ["manager_resolved", "bot_resolved", "opened"],
         },
         "items": golden_candidates,
     }
