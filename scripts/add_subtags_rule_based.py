@@ -71,6 +71,7 @@ def main():
         text = item.get("text", "")
         route = item.get("route", "")
 
+        # abandoned is a legacy label for opened rows in old channel_talk partitions.
         if route in ("opened", "abandoned"):
             item["subtags"] = []
             continue

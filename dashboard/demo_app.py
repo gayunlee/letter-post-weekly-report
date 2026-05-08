@@ -1060,6 +1060,7 @@ with tabs[3]:
             "manager_resolved": "상담사 처리 🧑‍💼",
             "bot_resolved": "봇 자동 처리 🤖",
             "opened": "열림 상태",
+            # Temporary compatibility for partitions written before route=opened.
             "abandoned": "열림 상태",
         }
         cols = st.columns(len(route_cnt))
