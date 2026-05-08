@@ -9,7 +9,7 @@
     messages = cq.get_weekly_messages("2026-02-09", "2026-02-16")
 """
 from typing import List, Dict, Any, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from .client import BigQueryClient
 
 
@@ -165,5 +165,5 @@ class ChannelQueryService:
     def _kst_to_unix_ms(date_str: str) -> int:
         """KST 날짜 문자열 → Unix timestamp (milliseconds)"""
         date = datetime.strptime(date_str, "%Y-%m-%d")
-        utc_time = date - timedelta(hours=9)
+        utc_time = (date - timedelta(hours=9)).replace(tzinfo=timezone.utc)
         return int(utc_time.timestamp() * 1000)

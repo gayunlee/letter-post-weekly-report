@@ -14,7 +14,6 @@ import json
 import time
 import logging
 import argparse
-from datetime import datetime, timedelta
 from collections import Counter
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -23,6 +22,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.bigquery.client import BigQueryClient
+from src.utils.date_utils import yesterday_kst, next_day
 from src.bigquery.queries import WeeklyDataQuery
 from src.bigquery.writer import BigQueryWriter
 from src.classifier_v5.bedrock_classifier import BedrockV5Classifier
@@ -236,13 +236,13 @@ def main():
     parser.add_argument("--workers", type=int, default=5, help="병렬 워커 수")
     args = parser.parse_args()
 
-    # 날짜 설정
+    # 날짜 설정 — KST 기준 어제 (Cloud Run UTC에서도 동일하게 동작)
     if args.date:
         target_date = args.date
     else:
-        target_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        target_date = yesterday_kst()
 
-    next_date = (datetime.strptime(target_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+    next_date = next_day(target_date)
 
     logger.info(f"=== VOC 일간 파이프라인 시작 ===")
     logger.info(f"대상 날짜: {target_date}")
