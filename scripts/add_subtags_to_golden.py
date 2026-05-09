@@ -35,8 +35,7 @@ def main():
         route = item.get("route", "")
 
         # opened는 완료 경로가 확정되지 않아 분류 스킵
-        # abandoned is a legacy label for opened rows in old channel_talk partitions.
-        if route in ("opened", "abandoned"):
+        if route == "opened":
             item["subtags"] = []
             item["kcelectra_topic"] = None
             item["kcelectra_confidence"] = None
